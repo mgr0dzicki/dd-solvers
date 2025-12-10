@@ -15,7 +15,7 @@ import torch
 import pyamgx
 
 from .bsr import FastBSR
-from .cusparse import csr_to_bsr, sort_csr
+from .cusparse import csr_to_bsr, sort_csr, gather_csr
 from .gemv import gemv_strided_batched
 from . import cudss
 
@@ -794,51 +794,18 @@ class ASM(SparseSolver):
             row_offsets=row_offsets,
         )
 
-    def _construct_csr_in_parts(self, indices, values, size):
-        # ?????
-        PARTS = 3
-        res = None
-        nnz = values.shape[0]
-        ss = (nnz + PARTS - 1) // PARTS
-        for p in range(PARTS):
-            start = ss * p
-            end = min(ss * (p + 1), nnz)
-            part = torch.sparse_coo_tensor(
-                indices[:, start:end],
-                values[start:end],
-                size=size,
-            ).to_sparse_csr()
-
-            if res is None:
-                res = part
-            else:
-                res += part
-        return res
-
     def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
-        row_sizes = Ap.crow_indices()[:: self.dofs_per_solver][
-            self.solvers_per_coarse_scan
-        ]
-        row_sizes = row_sizes[1:] - row_sizes[:-1]
-        csr_mat = torch.sparse_coo_tensor(
-            indices=torch.vstack(
-                [
-                    torch.arange(self.n_coarse, device=self.device).repeat_interleave(
-                        row_sizes
-                    ),
-                    Ap.col_indices(),
-                ]
-            ),
-            values=Ap.values(),
-            size=(self.n_coarse, Ap.shape[1]),
-        ).to_sparse_csr()
-
-        return torch.sparse_csr_tensor(
-            crow_indices=csr_mat.crow_indices().to(torch.int32),
-            col_indices=csr_mat.col_indices().to(torch.int32),
-            values=csr_mat.values().to(
-                self.preconditioner_precision or Ap.values().dtype
-            ),
+        return gather_csr(
+            sort_csr(
+                torch.sparse_csr_tensor(
+                    crow_indices=Ap.crow_indices()[
+                        self.solvers_per_coarse_scan * self.dofs_per_solver
+                    ],
+                    col_indices=Ap.col_indices().clone(),
+                    values=Ap.values().clone(),
+                    size=(self.n_coarse, Ap.shape[1]),
+                )
+            )
         )
 
     def _construct_coarse_solver_matrix(self, Ap: torch.Tensor) -> torch.Tensor:

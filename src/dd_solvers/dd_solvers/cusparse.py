@@ -1,4 +1,9 @@
 import torch
+import numba
+
+numba.config.CUDA_LOW_OCCUPANCY_WARNINGS = 0
+
+from numba import cuda
 
 torch.ops.dd_solvers_cusparse.init()
 
@@ -62,9 +67,92 @@ def sort_csr(matrix: torch.Tensor, num_parts: int | None = None) -> torch.Tensor
         crow_indices[row_start : row_end + 1] += crow_offset
         row_start = row_end
 
-    sorted_values = torch.cat(all_part_values, out=values)
+    torch.cat(all_part_values, out=values)
     return torch.sparse_csr_tensor(crow_indices, col_indices, values, size=matrix.shape)
 
 
 def csr_to_bsr(matrix: torch.Tensor, block_size: int) -> torch.Tensor:
     return torch.ops.dd_solvers_cusparse.csr_to_bsr(matrix, block_size)
+
+
+@cuda.jit
+def gather_csr_count_kernel(crow_indices, col_indices, output):
+    row = cuda.grid(1)
+    if row >= crow_indices.size - 1:
+        return
+
+    count = 0
+    prev = -1
+    for ind in range(crow_indices[row], crow_indices[row + 1]):
+        col = col_indices[ind]
+        if col != prev:
+            count += 1
+            prev = col
+
+    output[row] = count
+
+
+@cuda.jit
+def gather_csr_sum_kernel(
+    crow_indices, crow_indices_out, col_indices, col_indices_out, values, values_out
+):
+    row = cuda.grid(1)
+    if row >= crow_indices.size - 1:
+        return
+
+    out_pos = crow_indices_out[row]
+    prev = -1
+    sum = 0
+    for ind in range(crow_indices[row], crow_indices[row + 1]):
+        col = col_indices[ind]
+        val = values[ind]
+        if col == prev:
+            sum += val
+        else:
+            if prev != -1:
+                col_indices_out[out_pos] = prev
+                values_out[out_pos] = sum
+                out_pos += 1
+            prev = col
+            sum = val
+
+    if prev != -1:
+        col_indices_out[out_pos] = prev
+        values_out[out_pos] = sum
+
+
+def gather_csr(matrix: torch.Tensor) -> torch.Tensor:
+    crow_indices_out = torch.empty_like(matrix.crow_indices())
+
+    thread_block_size = 32
+    grid_size = (matrix.shape[0] + thread_block_size - 1) // thread_block_size
+    gather_csr_count_kernel[grid_size, thread_block_size](
+        matrix.crow_indices(),
+        matrix.col_indices(),
+        crow_indices_out[1:],
+    )
+    crow_indices_out[0] = 0
+    crow_indices_out[1:].cumsum_(dim=0)
+    nnz = crow_indices_out[-1].item()
+
+    col_indices_out = torch.empty(
+        (nnz,), dtype=matrix.col_indices().dtype, device=matrix.col_indices().device
+    )
+    values_out = torch.empty(
+        (nnz,), dtype=matrix.values().dtype, device=matrix.values().device
+    )
+    gather_csr_sum_kernel[grid_size, thread_block_size](
+        matrix.crow_indices(),
+        crow_indices_out,
+        matrix.col_indices(),
+        col_indices_out,
+        matrix.values(),
+        values_out,
+    )
+
+    return torch.sparse_csr_tensor(
+        crow_indices_out,
+        col_indices_out,
+        values_out,
+        size=matrix.shape,
+    )
