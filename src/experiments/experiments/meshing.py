@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import dolfinx
 from matplotlib import pyplot as plt
 from mpi4py import MPI
@@ -9,6 +10,7 @@ __all__ = [
     "Mesh2D",
     "Mesh3D",
     "MeshFamily",
+    "UniformMeshes",
 ]
 
 
@@ -127,30 +129,90 @@ class Mesh3D(Mesh):
         )
 
 
-class MeshFamily:
-    def __init__(self, meshes: list[Mesh], mappings: list[np.ndarray]):
-        self._meshes = meshes
-        self._mappings = mappings
+class MeshFamily(ABC):
+    @property
+    @abstractmethod
+    def name(self):
+        pass
 
-    def __getitem__(self, idx: int) -> Mesh:
-        return self._meshes[idx]
+    @abstractmethod
+    def __getitem__(self, idx: str) -> Mesh:
+        pass
 
-    def __len__(self) -> int:
-        return len(self._meshes)
+    @abstractmethod
+    def get_mapping(self, from_mesh: str, to_mesh: str) -> np.ndarray:
+        pass
 
-    def get_mapping(self, a: int, b: int) -> np.ndarray:
-        res = np.arange(self._meshes[a].num_cells, dtype=np.int32)
-        for i in range(a - 1, b - 1, -1):
-            res = self._mappings[i][res]
-        return res
 
-    def refinements(base: Mesh, n: int):
-        meshes = [None] * n
-        mappings = [None] * (n - 1)
-        meshes[0] = base
-        for i in range(1, n):
-            meshes[i], mappings[i - 1] = meshes[i - 1].refine(1)
-        return MeshFamily(meshes=meshes, mappings=mappings)
+class UniformMeshes(MeshFamily):
+    def __init__(self, d: int, m: int):
+        self.d = d
+        self.m = m
+
+        self.s_meshes = [None] * (m + 1)
+        self.s_mappings = [None] * (m + 1)
+        self.s_meshes[0] = (
+            Mesh2D.unit_square_uniform(1, 1)
+            if d == 2
+            else Mesh3D.unit_cube_uniform(1, 1, 1)
+        )
+        for i in range(1, m + 1):
+            self.s_meshes[i], self.s_mappings[i - 1] = self.s_meshes[i - 1].refine(1)
+
+        self.c_meshes = [
+            (
+                Mesh2D(
+                    dolfinx.mesh.create_unit_square(
+                        comm=MPI.COMM_WORLD,
+                        nx=2**i,
+                        ny=2**i,
+                        cell_type=dolfinx.mesh.CellType.quadrilateral,
+                    )
+                )
+                if d == 2
+                else Mesh3D(
+                    dolfinx.mesh.create_unit_cube(
+                        comm=MPI.COMM_WORLD,
+                        nx=2**i,
+                        ny=2**i,
+                        nz=2**i,
+                        cell_type=dolfinx.mesh.CellType.hexahedron,
+                    )
+                )
+            )
+            for i in range(m + 1)
+        ]
+
+    @property
+    def name(self):
+        return f"uniform({self.d}D,{self.m})"
+
+    def __getitem__(self, idx: str) -> Mesh:
+        if idx.startswith("S"):
+            level = int(idx[1:])
+            return self.s_meshes[level]
+        elif idx.startswith("C"):
+            level = int(idx[1:])
+            return self.c_meshes[level]
+        else:
+            raise ValueError(f"Unknown mesh id {idx}")
+
+    def get_mapping(self, from_mesh: str, to_mesh: str) -> np.ndarray:
+        from_type, from_level = from_mesh[0], int(from_mesh[1:])
+        to_type, to_level = to_mesh[0], int(to_mesh[1:])
+        if from_type == "S" and to_type == "S":
+            res = np.arange(self.s_meshes[from_level].num_cells, dtype=np.int32)
+            for i in range(from_level - 1, to_level - 1, -1):
+                res = self.s_mappings[i][res]
+            return res
+        elif to_type == "C":
+            return UniformMeshes._mapping_to_quadrilateral_uniform(
+                2**to_level,
+                self[from_mesh],
+                self[to_mesh],
+            )
+        else:
+            raise ValueError(f"Unsupported mapping from {from_mesh} to {to_mesh}")
 
     def _flat_coords(mesh: Mesh, m: int):
         coords = np.floor(mesh.vertices[mesh.elements].mean(axis=1) * m).astype(int)
@@ -162,56 +224,8 @@ class MeshFamily:
             raise ValueError(f"Unsupported dimension {mesh.tdim}")
 
     def _mapping_to_quadrilateral_uniform(m: int, from_mesh: Mesh, to_mesh: Mesh):
-        to_flat_coords = MeshFamily._flat_coords(to_mesh, m)
+        to_flat_coords = UniformMeshes._flat_coords(to_mesh, m)
         coords_to_mesh = to_flat_coords.argsort()
 
-        from_flat_coords = MeshFamily._flat_coords(from_mesh, m)
+        from_flat_coords = UniformMeshes._flat_coords(from_mesh, m)
         return coords_to_mesh[from_flat_coords]
-
-    def uniform_quadrilateral(d: int, n: int):
-        meshes = [None] * (n + 1)
-        mappings = [None] * n
-        m = 2 ** (n - 1)
-        if d == 2:
-            # Hack to generate mesh with varying diagonal direction
-            meshes[-1] = Mesh2D.unit_square_uniform(1, 1).refine(n - 1)[0]
-        elif d == 3:
-            # Hack to generate mesh with varying diagonal direction
-            meshes[-1] = Mesh3D.unit_cube_uniform(1, 1, 1).refine(n - 1)[0]
-        else:
-            raise ValueError(f"Unsupported dimension {d}")
-        for i in range(n - 1, -1, -1):
-            if d == 2:
-                meshes[i] = Mesh2D(
-                    dolfinx.mesh.create_unit_square(
-                        comm=MPI.COMM_WORLD,
-                        nx=2**i,
-                        ny=2**i,
-                        cell_type=dolfinx.mesh.CellType.quadrilateral,
-                    )
-                )
-            else:
-                meshes[i] = Mesh3D(
-                    dolfinx.mesh.create_unit_cube(
-                        comm=MPI.COMM_WORLD,
-                        nx=2**i,
-                        ny=2**i,
-                        nz=2**i,
-                        cell_type=dolfinx.mesh.CellType.hexahedron,
-                    )
-                )
-            mappings[i] = MeshFamily._mapping_to_quadrilateral_uniform(
-                2**i, meshes[i + 1], meshes[i]
-            )
-        return MeshFamily(meshes=meshes, mappings=mappings)
-
-    def simplices_then_cubes(d: int, fine: int, both: int):
-        mesh_family_cubes = MeshFamily.uniform_quadrilateral(d, both + 1)
-        mesh_family_simplices = MeshFamily.refinements(
-            base=mesh_family_cubes[both + 1],
-            n=fine - both + 1,
-        )
-
-        meshes = mesh_family_cubes._meshes + mesh_family_simplices._meshes[1:]
-        mappings = mesh_family_cubes._mappings + mesh_family_simplices._mappings
-        return MeshFamily(meshes=meshes, mappings=mappings)

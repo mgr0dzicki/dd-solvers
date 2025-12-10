@@ -24,9 +24,9 @@ __all__ = ["Experiment", "ExperimentFactory"]
 
 
 class Experiment(NamedTuple):
-    fine_m: int
-    solvers_m: int | None
-    coarse_m: int | None
+    fine_m: str
+    solvers_m: str | None
+    coarse_m: str | None
     solver: SparseSolver
 
 
@@ -78,7 +78,7 @@ class ExperimentFactory:
 
         return pd.DataFrame(results)
 
-    def _problem(self, m: int) -> DiscreteProblem:
+    def _problem(self, m: str) -> DiscreteProblem:
         discrete_problem = discretize(
             problem=self.test_case.problem,
             mesh=self.mesh_family[m],
@@ -86,7 +86,7 @@ class ExperimentFactory:
         )
         return discrete_problem.astype(self.problem_precision)
 
-    def _real_solution_fun(self, m: int) -> dolfinx.fem.Function:
+    def _real_solution_fun(self, m: str) -> dolfinx.fem.Function:
         error_function_space = dolfinx.fem.functionspace(
             self.mesh_family[m].dolfinx_mesh, ("DG", self.polynomial_degree + 2)
         )
@@ -144,6 +144,7 @@ class ExperimentFactory:
             fine_to_solvers_np = self.mesh_family.get_mapping(
                 experiment.fine_m, experiment.solvers_m
             )
+            print(fine_to_solvers_np)
             solvers_to_coarse_np = self.mesh_family.get_mapping(
                 experiment.solvers_m, experiment.coarse_m
             )

@@ -2,7 +2,7 @@ import pytest
 
 import numpy as np
 import torch
-from dd_solvers import CUDSS, ASM, Inv, CG
+from dd_solvers import CUDSS, AdditiveSchwarz, Inv, CG
 
 from experiments import *
 
@@ -10,9 +10,9 @@ from experiments import *
 def test_experiment_factory():
     factory = ExperimentFactory(
         test_case=continuous_coefficient_2d,
-        mesh_family=MeshFamily.refinements(
-            base=Mesh2D.unit_square_uniform(1, 1),
-            n=4,
+        mesh_family=UniformMeshes(
+            d=2,
+            m=4,
         ),
         number_of_repetitions=3,
         problem_precision=np.float64,
@@ -21,7 +21,7 @@ def test_experiment_factory():
 
     factory.add(
         Experiment(
-            fine_m=3,
+            fine_m="S3",
             solvers_m=None,
             coarse_m=None,
             solver=CUDSS(),
@@ -29,10 +29,10 @@ def test_experiment_factory():
     )
     factory.add(
         Experiment(
-            fine_m=3,
-            solvers_m=2,
-            coarse_m=0,
-            solver=CG(ASM(torch.float32, Inv(torch.bfloat16), CUDSS())),
+            fine_m="S3",
+            solvers_m="C3",
+            coarse_m="C0",
+            solver=CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS())),
         )
     )
 
