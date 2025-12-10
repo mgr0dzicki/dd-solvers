@@ -118,10 +118,17 @@ class ExperimentFactory:
 
             results.append(
                 {
+                    "test case": self.test_case.name,
+                    "p": self.polynomial_degree,
+                    "mesh family": self.mesh_family.name,
                     "fine m": experiment.fine_m,
                     "solvers m": experiment.solvers_m,
                     "coarse m": experiment.coarse_m,
                     "solver": str(experiment.solver),
+                    "random rhs": self.random_rhs,
+                    "solution warmup steps": self.solution_warmup_steps,
+                    "solution measurement steps": self.solution_measurement_steps,
+                    "solution repetitions": self.solution_repetitions,
                     **result,
                     "repetition": rep,
                     "exception": exception,
@@ -144,7 +151,6 @@ class ExperimentFactory:
             fine_to_solvers_np = self.mesh_family.get_mapping(
                 experiment.fine_m, experiment.solvers_m
             )
-            print(fine_to_solvers_np)
             solvers_to_coarse_np = self.mesh_family.get_mapping(
                 experiment.solvers_m, experiment.coarse_m
             )

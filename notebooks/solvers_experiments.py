@@ -1,18 +1,13 @@
-# %%
 import sys
 from dd_solvers import *
 from experiments import *
 import torch
 import pandas as pd
 
-# %%
 d = int(sys.argv[1])
 p = int(sys.argv[2])
 fine_m = int(sys.argv[3])
 
-cases = ["simplicial", "cubical", "mixed"]
-
-# %%
 cg_kwargs = {
     "maxiter": 2000,
     "rtol": 1e-9,
@@ -31,118 +26,48 @@ asm_factory_kwargs = {
     "solution_repetitions": 10,
 }
 
-# %%
-local_solvers_map = {
-    "inv": Inv(),
-    "inv16": Inv(torch.float16),
-    "lu": LU(),
-    "cholesky": Cholesky(),
-    "cudss": BatchCUDSS(),
-}
-local_solvers = [Inv(torch.float16)]
-print("local solvers: ", local_solvers)
+solvers = [
+    CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
+    CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
+]
 
-# %%
-results_prefix = (
-    f"../results/experiment_solvers_new_d{d}_p{p}_f{fine_m}"
+results_path = (
+    f"../results/experiment_solvers_d{d}_p{p}_f{fine_m}.csv"
 )
-print("results_prefix: ", results_prefix)
+print("results path: ", results_path)
 
+print("Generating mesh family...")
+mesh_family = UniformMeshes(d=d, m=fine_m)
+factory = ExperimentFactory(**factory_kwargs, mesh_family=mesh_family)
 
-# %%
-def run_experiments(mesh_family, ms):
-    factory = ExperimentFactory(**factory_kwargs, mesh_family=mesh_family)
+ms_simp = [
+    (f"S{coarse_m}", f"S{solvers_m}", f"S{fine_m}")
+    for coarse_m in range(fine_m - 2, fine_m + 1)
+    for solvers_m in range(coarse_m, fine_m + 1)
+]
+ms_cub = [
+    (f"C{coarse_m}", f"C{solvers_m}", f"S{fine_m}")
+    for coarse_m in range(fine_m - 2, fine_m + 1)
+    for solvers_m in range(coarse_m, fine_m + 1)
+]
+ms_mixed = [
+    (f"C{coarse_m}", f"S{solvers_m}", f"S{fine_m}")
+    for coarse_m in range(fine_m - 2, fine_m + 1)
+    for solvers_m in range(coarse_m, fine_m + 1)
+]
 
-    for coarse_m, solvers_m, fine_m in ms:
-        for local_solver in local_solvers:
-            factory.add(
-                Experiment(
-                    coarse_m=coarse_m,
-                    solvers_m=solvers_m,
-                    fine_m=fine_m,
-                    solver=CG(ASM(torch.float32, local_solver, CUDSS()), **cg_kwargs),
-                )
+ms = ms_simp + ms_cub + ms_mixed
+
+for coarse_m, solvers_m, fine_m_str in ms:
+    for solver in solvers:
+        factory.add(
+            Experiment(
+                coarse_m=coarse_m,
+                solvers_m=solvers_m,
+                fine_m=fine_m_str,
+                solver=solver,
             )
-            # factory.add(
-            #     Experiment(
-            #         coarse_m=coarse_m,
-            #         solvers_m=solvers_m,
-            #         fine_m=fine_m,
-            #         solver=CG(
-            #             ASM(
-            #                 torch.float64,
-            #                 local_solver,
-            #                 CUDSS(),
-            #                 hybrid=True,
-            #             ),
-            #             **cg_kwargs,
-            #         ),
-            #     )
-            # )
-
-    return factory.run()
-
-
-# %%
-if "simplicial" in cases:
-    print("Case 1: All meshes simplicial")
-
-    mesh_family = MeshFamily.simplices_then_cubes(
-        d=d,
-        fine=fine_m,
-        both=0,
-    )
-
-    ms = [
-        (coarse_m, solvers_m, fine_m + 1)
-        for coarse_m in range(fine_m - 1, fine_m + 2)
-        for solvers_m in range(coarse_m, fine_m + 2)
-    ]
-
-    df_simp = run_experiments(mesh_family, ms)
-    df_simp["case"] = "simplicial"
-    df_simp.to_csv(f"{results_prefix}_simplicial.csv", index=False)
-
-# %%
-if "cubical" in cases:
-    print("Case 2: coarse and solvers cubical, fine simplicial")
-
-    mesh_family = MeshFamily.simplices_then_cubes(
-        d=d,
-        fine=fine_m,
-        both=fine_m,
-    )
-
-    ms = [
-        (coarse_m, solvers_m, fine_m + 1)
-        for coarse_m in range(fine_m - 2, fine_m + 1)
-        for solvers_m in range(coarse_m, fine_m + 1)
-    ]
-
-    df_cubical = run_experiments(mesh_family, ms)
-    df_cubical["case"] = "cubical"
-    df_cubical.to_csv(f"{results_prefix}_cubical.csv", index=False)
-
-# %%
-if "mixed" in cases:
-    print("Case 3: coarse cubical, solvers and fine simplicial")
-
-    mixed_dfs = []
-    for coarse_m in range(fine_m - 2, fine_m + 1):
-        print(f"coarse_m: {coarse_m}")
-        mesh_family = MeshFamily.simplices_then_cubes(
-            d=d,
-            fine=fine_m,
-            both=coarse_m,
         )
-        ms = [
-            (coarse_m, solvers_m, fine_m + 1)
-            for solvers_m in range(coarse_m + 1, fine_m + 2)
-        ]
-        df3 = run_experiments(mesh_family, ms)
-        df3["case"] = "mixed"
-        mixed_dfs.append(df3)
-    df_mixed = pd.concat(mixed_dfs, ignore_index=True)
-    df_mixed.to_csv(f"{results_prefix}_mixed.csv", index=False)
 
-# %%
+df = factory.run()
+df.to_csv(f"{results_path}.csv", index=False)

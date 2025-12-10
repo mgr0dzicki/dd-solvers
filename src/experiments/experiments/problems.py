@@ -24,11 +24,13 @@ Solution = Callable[[np.ndarray], np.ndarray]
 
 
 class TestCase(NamedTuple):
+    name: str
     problem: Problem
     solution: Solution
 
 
 constant_coefficient_2d = TestCase(
+    "constant coefficient 2D",
     Problem(
         delta=7,
         rho=lambda x: np.ones(x.shape[1]),
@@ -38,6 +40,7 @@ constant_coefficient_2d = TestCase(
 )
 
 constant_coefficient_3d = TestCase(
+    "constant coefficient 3D",
     Problem(
         delta=17,
         rho=lambda x: np.ones(x.shape[1]),
@@ -47,6 +50,7 @@ constant_coefficient_3d = TestCase(
 )
 
 continuous_coefficient_2d = TestCase(
+    "continuous coefficient 2D",
     Problem(
         delta=7,
         rho=lambda x: x[0] ** 2 + x[1] ** 2 + 1,
@@ -65,6 +69,7 @@ continuous_coefficient_2d = TestCase(
 )
 
 continuous_coefficient_3d = TestCase(
+    "continuous coefficient 3D",
     Problem(
         delta=17,
         rho=lambda x: x[0] ** 2 + x[1] ** 2 + x[2] ** 2 + 1,
