@@ -12,6 +12,12 @@ void gemvStridedBatchedDoubleDouble(const double* mat,
                                     int n,
                                     int k);
 
+void gemvStridedBatchedDoubleFloat(const float* mat,
+                                   const double* vec,
+                                   double* out,
+                                   int n,
+                                   int k);
+
 void gemvStridedBatchedFloatFloat(const float* mat,
                                   const float* vec,
                                   float* out,

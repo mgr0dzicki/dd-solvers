@@ -28,6 +28,11 @@ at::Tensor gemvStridedBatched(
                                    vec.const_data_ptr<double>(),
                                    out.mutable_data_ptr<double>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Float &&
+             vec.scalar_type() == at::ScalarType::Double) {
+    gemvStridedBatchedDoubleFloat(mat.const_data_ptr<float>(),
+                                  vec.const_data_ptr<double>(),
+                                  out.mutable_data_ptr<double>(), n, k);
+  } else if (mat.scalar_type() == at::ScalarType::Float &&
              vec.scalar_type() == at::ScalarType::Float) {
     gemvStridedBatchedFloatFloat(mat.const_data_ptr<float>(),
                                  vec.const_data_ptr<float>(),

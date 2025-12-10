@@ -110,11 +110,11 @@ __global__ void gemvStridedBatchedDoubleHalfKernel(
   out[(size_t)batch * (size_t)k + (size_t)row] = acc;
 }
 
-template <typename T>
+template <typename T, typename U>
 __global__ void gemvStridedBatchedUniformKernel(
     const T* __restrict__ mat,  // shape: (n, k, k) column-major
-    const T* __restrict__ vec,  // shape: (n, k)
-    T* __restrict__ out,        // shape: (n, k)
+    const U* __restrict__ vec,  // shape: (n, k)
+    U* __restrict__ out,        // shape: (n, k)
     int n,
     int k) {
   const int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -125,12 +125,12 @@ __global__ void gemvStridedBatchedUniformKernel(
   const int row = tid % k;
 
   const T* matBase = mat + (size_t)batch * (size_t)k * (size_t)k;
-  const T* vecBase = vec + (size_t)batch * (size_t)k;
-  T acc = 0;
+  const U* vecBase = vec + (size_t)batch * (size_t)k;
+  U acc = 0;
 
   for (int c = 0; c < k; c++) {
-    T m = (matBase + (size_t)c * (size_t)k)[row];
-    T v = vecBase[c];
+    U m = static_cast<U>((matBase + (size_t)c * (size_t)k)[row]);
+    U v = vecBase[c];
     acc += m * v;
   }
 
@@ -147,7 +147,21 @@ void gemvStridedBatchedDoubleDouble(const double* mat,
   const int grid = (total + blockSize - 1) / blockSize;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedUniformKernel<double>
+  gemvStridedBatchedUniformKernel<double, double>
+      <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
+}
+
+void gemvStridedBatchedDoubleFloat(const float* mat,
+                                   const double* vec,
+                                   double* out,
+                                   int n,
+                                   int k) {
+  const int total = n * k;
+  const int blockSize = 128;
+  const int grid = (total + blockSize - 1) / blockSize;
+
+  auto stream = at::cuda::getCurrentCUDAStream();
+  gemvStridedBatchedUniformKernel<float, double>
       <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
 }
 
@@ -161,7 +175,7 @@ void gemvStridedBatchedFloatFloat(const float* mat,
   const int grid = (total + blockSize - 1) / blockSize;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedUniformKernel<float>
+  gemvStridedBatchedUniformKernel<float, float>
       <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
 }
 
