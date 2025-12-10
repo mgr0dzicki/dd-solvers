@@ -1,6 +1,6 @@
 #include "gemv_kernels.hpp"
 
-__global__ void gemvStridedBatchedBf16Kernel(
+__global__ void gemvStridedBatchedFloatBf16Kernel(
     const __nv_bfloat16* __restrict__ mat,  // shape: (n, k, k)
                                             // column-major
     const float* __restrict__ vec,          // shape: (n, k)
@@ -28,7 +28,7 @@ __global__ void gemvStridedBatchedBf16Kernel(
   out[(size_t)batch * (size_t)k + (size_t)row] = acc;
 }
 
-__global__ void gemvStridedBatchedHalfKernel(
+__global__ void gemvStridedBatchedFloatHalfKernel(
     const __half* __restrict__ mat,  // shape: (n, k, k) column-major
     const float* __restrict__ vec,   // shape: (n, k)
     float* __restrict__ out,         // shape: (n, k)
@@ -82,11 +82,11 @@ __global__ void gemvStridedBatchedUniformKernel(
   out[(size_t)batch * (size_t)k + (size_t)row] = acc;
 }
 
-void gemvStridedBatchedDouble(const double* mat,
-                              const double* vec,
-                              double* out,
-                              int n,
-                              int k) {
+void gemvStridedBatchedDoubleDouble(const double* mat,
+                                    const double* vec,
+                                    double* out,
+                                    int n,
+                                    int k) {
   const int total = n * k;
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
@@ -96,11 +96,11 @@ void gemvStridedBatchedDouble(const double* mat,
       <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
 }
 
-void gemvStridedBatchedFloat(const float* mat,
-                             const float* vec,
-                             float* out,
-                             int n,
-                             int k) {
+void gemvStridedBatchedFloatFloat(const float* mat,
+                                  const float* vec,
+                                  float* out,
+                                  int n,
+                                  int k) {
   const int total = n * k;
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
@@ -110,30 +110,30 @@ void gemvStridedBatchedFloat(const float* mat,
       <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
 }
 
-void gemvStridedBatchedBf16(const at::BFloat16* mat,
-                            const float* vec,
-                            float* out,
-                            int n,
-                            int k) {
+void gemvStridedBatchedFloatBf16(const at::BFloat16* mat,
+                                 const float* vec,
+                                 float* out,
+                                 int n,
+                                 int k) {
   const int total = n * k;
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedBf16Kernel<<<grid, blockSize, 0, stream>>>(
+  gemvStridedBatchedFloatBf16Kernel<<<grid, blockSize, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(mat), vec, out, n, k);
 }
 
-void gemvStridedBatchedHalf(const at::Half* mat,
-                            const float* vec,
-                            float* out,
-                            int n,
-                            int k) {
+void gemvStridedBatchedFloatHalf(const at::Half* mat,
+                                 const float* vec,
+                                 float* out,
+                                 int n,
+                                 int k) {
   const int total = n * k;
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedHalfKernel<<<grid, blockSize, 0, stream>>>(
+  gemvStridedBatchedFloatHalfKernel<<<grid, blockSize, 0, stream>>>(
       reinterpret_cast<const __half*>(mat), vec, out, n, k);
 }

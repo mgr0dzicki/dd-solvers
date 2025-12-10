@@ -349,8 +349,8 @@ class Inv(DenseBatchSolver):
     def solve(self, rhs_batch: torch.Tensor) -> torch.Tensor:
         return gemv_strided_batched(
             self.matrix_inv,
-            rhs_batch.reshape(self.matrix_inv.shape[0], -1).to(torch.float32),
-        ).to(rhs_batch.dtype)
+            rhs_batch.reshape(self.matrix_inv.shape[0], -1),
+        )
 
 
 class LU(DenseBatchSolver):
@@ -545,7 +545,7 @@ def asm_permutation(
     return perm
 
 
-class ASM(SparseSolver):
+class SchwarzOperator(SparseSolver):
     """
     Assumes every solver has the same number of dofs.
     """
@@ -555,19 +555,12 @@ class ASM(SparseSolver):
         preconditioner_precision: torch.dtype,
         local_solver: DenseBatchSolver | SparseBatchSolver,
         coarse_solver: SparseSolver,
-        number_of_dofs_per_coarse_is_const: bool = False,
-        hybrid: bool = False,
         collect_timings: bool = False,
     ):
         self.preconditioner_precision = preconditioner_precision
         self.local_solver = local_solver
         self.coarse_solver = coarse_solver
-        self.number_of_dofs_per_coarse_is_const = number_of_dofs_per_coarse_is_const
-        self.hybrid = hybrid
         self.collect_timings = collect_timings
-
-    def __str__(self):
-        return f"ASM({self.preconditioner_precision}, {self.local_solver}, {self.coarse_solver}, const_dofs_per_coarse={self.number_of_dofs_per_coarse_is_const}, hybrid={self.hybrid})"
 
     def setup(
         self,
@@ -597,14 +590,6 @@ class ASM(SparseSolver):
         self.solvers_per_coarse_scan[1:] = solvers_per_coarse.cumsum(dim=0)
 
         self.n_solvers = int(self.solvers_per_coarse_scan[-1].item())
-
-        if self.number_of_dofs_per_coarse_is_const:
-            self.dofs_per_coarse = dofs_per_solver * int(
-                self.solvers_per_coarse[0].item()
-            )
-
-        if self.hybrid:
-            self.R0A = self._construct_R0A_matrix(matrix)
 
         if self.collect_timings:
             events[1].record()
@@ -650,73 +635,6 @@ class ASM(SparseSolver):
 
     def destroy(self) -> None:
         self.coarse_solver.destroy()
-
-    def T0(self, rhs: torch.Tensor) -> torch.Tensor:
-        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        x_c = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-        x_c = torch.segment_reduce(
-            x_c, reduce="sum", offsets=self.solvers_per_coarse_scan
-        )
-        y_c = self.coarse_solver.solve(x_c)[0]
-        y_solvers = y_c.repeat_interleave(
-            self.solvers_per_coarse, output_size=self.n_solvers
-        )
-        y = y_solvers.repeat_interleave(self.dofs_per_solver, output_size=rhs.shape[0])
-        return y.to(rhs.dtype)
-
-    @torch.compile
-    def _solve_regular(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
-        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-        x_c = torch.segment_reduce(
-            x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
-        )
-        x_i = x_lower_precision.reshape(self.n_solvers, -1)
-        y_c = self.coarse_solver.solve(x_c)[0]
-        y_i = self.local_solver.solve(x_i)
-        y = y_i.flatten()
-        y_solvers = y_c.repeat_interleave(
-            self.solvers_per_coarse, output_size=self.n_solvers
-        )
-        y += y_solvers.repeat_interleave(self.dofs_per_solver, output_size=y.shape[0])
-        return y.to(rhs.dtype), {}
-
-    @torch.compile
-    def _solve_hybrid(self, rhs: torch.Tensor) -> Tuple[torch.Tensor, Metadata]:
-        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        res = self.local_solver.solve(
-            x_lower_precision.reshape(self.n_solvers, -1)
-        ).flatten()
-        z = self.R0A @ res
-        y_c = self.coarse_solver.solve(z)[0]
-        y_solvers = y_c.repeat_interleave(
-            self.solvers_per_coarse, output_size=self.n_solvers
-        )
-        res -= y_solvers.repeat_interleave(
-            self.dofs_per_solver, output_size=res.shape[0]
-        )
-        return res.to(rhs.dtype), {}
-
-    @torch.compile
-    def _solve_const_dofs_per_coarse(
-        self, rhs: torch.Tensor
-    ) -> tuple[torch.Tensor, Metadata]:
-        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        x_c = x_lower_precision.reshape(self.n_coarse, -1).sum(dim=1)
-        x_i = x_lower_precision.reshape(self.n_solvers, -1)
-        y_c = self.coarse_solver.solve(x_c)[0]
-        y_i = self.local_solver.solve(x_i)
-        y = y_i.flatten()
-        y += y_c.repeat_interleave(self.dofs_per_coarse, output_size=y.shape[0])
-        return y.to(rhs.dtype), {}
-
-    def solve(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
-        if self.number_of_dofs_per_coarse_is_const:
-            return self._solve_const_dofs_per_coarse(rhs)
-        elif self.hybrid:
-            return self._solve_hybrid(rhs)
-        else:
-            return self._solve_regular(rhs)
 
     def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
         A_i = torch.zeros(
@@ -794,20 +712,6 @@ class ASM(SparseSolver):
             row_offsets=row_offsets,
         )
 
-    def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
-        return gather_csr(
-            sort_csr(
-                torch.sparse_csr_tensor(
-                    crow_indices=Ap.crow_indices()[
-                        self.solvers_per_coarse_scan * self.dofs_per_solver
-                    ],
-                    col_indices=Ap.col_indices().clone(),
-                    values=Ap.values().clone(),
-                    size=(self.n_coarse, Ap.shape[1]),
-                )
-            )
-        )
-
     def _construct_coarse_solver_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
         solvers_to_coarse = torch.arange(
             self.n_coarse, device=self.device
@@ -859,6 +763,171 @@ class ASM(SparseSolver):
             values,
             size=(self.n_coarse, self.n_coarse),
         ).to_sparse_csr()
+
+
+class AdditiveSchwarz(SchwarzOperator):
+    def __init__(
+        self,
+        preconditioner_precision: torch.dtype,
+        local_solver: DenseBatchSolver | SparseBatchSolver,
+        coarse_solver: SparseSolver,
+        number_of_dofs_per_coarse_is_const: bool = False,
+        collect_timings: bool = False,
+    ):
+        super().__init__(
+            preconditioner_precision,
+            local_solver,
+            coarse_solver,
+            collect_timings,
+        )
+        self.number_of_dofs_per_coarse_is_const = number_of_dofs_per_coarse_is_const
+
+    def __str__(self):
+        return f"AdditiveSchwarz({self.preconditioner_precision}, {self.local_solver}, {self.coarse_solver}, const_dofs_per_coarse={self.number_of_dofs_per_coarse_is_const})"
+
+    def setup(
+        self,
+        matrix: torch.Tensor,
+        dofs_per_solver: int,
+        solvers_per_coarse: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> None:
+        timings = super().setup(
+            matrix, dofs_per_solver, solvers_per_coarse, *args, **kwargs
+        )
+        if self.number_of_dofs_per_coarse_is_const:
+            self.dofs_per_coarse = dofs_per_solver * int(
+                self.solvers_per_coarse[0].item()
+            )
+        return timings
+
+    @torch.compile
+    def _solve_regular(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+        x_c = torch.segment_reduce(
+            x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
+        )
+        x_i = x_lower_precision.reshape(self.n_solvers, -1)
+        y_c = self.coarse_solver.solve(x_c)[0]
+        y_i = self.local_solver.solve(x_i)
+        y = y_i.flatten()
+        y_solvers = y_c.repeat_interleave(
+            self.solvers_per_coarse, output_size=self.n_solvers
+        )
+        y += y_solvers.repeat_interleave(self.dofs_per_solver, output_size=y.shape[0])
+        return y.to(rhs.dtype), {}
+
+    @torch.compile
+    def _solve_const_dofs_per_coarse(
+        self, rhs: torch.Tensor
+    ) -> tuple[torch.Tensor, Metadata]:
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        x_c = x_lower_precision.reshape(self.n_coarse, -1).sum(dim=1)
+        x_i = x_lower_precision.reshape(self.n_solvers, -1)
+        y_c = self.coarse_solver.solve(x_c)[0]
+        y_i = self.local_solver.solve(x_i)
+        y = y_i.flatten()
+        y += y_c.repeat_interleave(self.dofs_per_coarse, output_size=y.shape[0])
+        return y.to(rhs.dtype), {}
+
+    def solve(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
+        if self.number_of_dofs_per_coarse_is_const:
+            return self._solve_const_dofs_per_coarse(rhs)
+        else:
+            return self._solve_regular(rhs)
+
+
+class HybridSchwarz(SchwarzOperator):
+    def __init__(
+        self,
+        preconditioner_precision: torch.dtype,
+        local_solver: DenseBatchSolver | SparseBatchSolver,
+        coarse_solver: SparseSolver,
+        collect_timings: bool = False,
+    ):
+        super().__init__(
+            preconditioner_precision,
+            local_solver,
+            coarse_solver,
+            collect_timings,
+        )
+
+    def __str__(self):
+        return f"HybridSchwarz({self.preconditioner_precision}, {self.local_solver}, {self.coarse_solver})"
+
+    def setup(
+        self,
+        matrix: torch.Tensor,
+        dofs_per_solver: int,
+        solvers_per_coarse: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> None:
+        timings = super().setup(
+            matrix, dofs_per_solver, solvers_per_coarse, *args, **kwargs
+        )
+        self.R0A = self._construct_R0A_matrix(matrix)
+        return timings
+
+    def T0(self, rhs: torch.Tensor) -> torch.Tensor:
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        x_c = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+        x_c = torch.segment_reduce(
+            x_c, reduce="sum", offsets=self.solvers_per_coarse_scan
+        )
+        y_c = self.coarse_solver.solve(x_c)[0]
+        y_solvers = y_c.repeat_interleave(
+            self.solvers_per_coarse, output_size=self.n_solvers
+        )
+        y = y_solvers.repeat_interleave(self.dofs_per_solver, output_size=rhs.shape[0])
+        return y.to(rhs.dtype)
+
+    @torch.compile
+    def solve(self, rhs: torch.Tensor) -> Tuple[torch.Tensor, Metadata]:
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        res = self.local_solver.solve(
+            x_lower_precision.reshape(self.n_solvers, -1)
+        ).flatten()
+        z = self.R0A @ res
+        y_c = self.coarse_solver.solve(z)[0]
+        y_solvers = y_c.repeat_interleave(
+            self.solvers_per_coarse, output_size=self.n_solvers
+        )
+        res -= y_solvers.repeat_interleave(
+            self.dofs_per_solver, output_size=res.shape[0]
+        )
+        return res.to(rhs.dtype), {}
+
+    def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
+        A_i = torch.zeros(
+            (self.n_solvers, self.dofs_per_solver, self.dofs_per_solver),
+            device=self.device,
+            dtype=self.preconditioner_precision or Ap.values().dtype,
+        )
+
+        thread_block_size = 32
+        grid_size = (Ap.size(0) + thread_block_size - 1) // thread_block_size
+        construct_local_solvers_matrices_dense_kernel[grid_size, thread_block_size](
+            self.dofs_per_solver, Ap.crow_indices(), Ap.col_indices(), Ap.values(), A_i
+        )
+
+        return A_i
+
+    def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
+        return gather_csr(
+            sort_csr(
+                torch.sparse_csr_tensor(
+                    crow_indices=Ap.crow_indices()[
+                        self.solvers_per_coarse_scan * self.dofs_per_solver
+                    ],
+                    col_indices=Ap.col_indices().clone(),
+                    values=Ap.values().clone(),
+                    size=(self.n_coarse, Ap.shape[1]),
+                )
+            )
+        )
 
 
 class AMGX(SparseSolver):

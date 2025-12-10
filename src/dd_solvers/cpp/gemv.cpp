@@ -24,24 +24,24 @@ at::Tensor gemvStridedBatched(
 
   if (mat.scalar_type() == at::ScalarType::Double &&
       vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDouble(mat.const_data_ptr<double>(),
-                             vec.const_data_ptr<double>(),
-                             out.mutable_data_ptr<double>(), n, k);
+    gemvStridedBatchedDoubleDouble(mat.const_data_ptr<double>(),
+                                   vec.const_data_ptr<double>(),
+                                   out.mutable_data_ptr<double>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Float &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloat(mat.const_data_ptr<float>(),
-                            vec.const_data_ptr<float>(),
-                            out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedFloatFloat(mat.const_data_ptr<float>(),
+                                 vec.const_data_ptr<float>(),
+                                 out.mutable_data_ptr<float>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedBf16(mat.const_data_ptr<at::BFloat16>(),
-                           vec.const_data_ptr<float>(),
-                           out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedFloatBf16(mat.const_data_ptr<at::BFloat16>(),
+                                vec.const_data_ptr<float>(),
+                                out.mutable_data_ptr<float>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Half &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedHalf(mat.const_data_ptr<at::Half>(),
-                           vec.const_data_ptr<float>(),
-                           out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedFloatHalf(mat.const_data_ptr<at::Half>(),
+                                vec.const_data_ptr<float>(),
+                                out.mutable_data_ptr<float>(), n, k);
   } else {
     TORCH_CHECK(false, "Unsupported data type for matvec operation");
   }
