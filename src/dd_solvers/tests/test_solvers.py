@@ -16,6 +16,7 @@ from dd_solvers import (
     Cholesky,
     SparseSolver,
     AdditiveSchwarz,
+    HybridSchwarz,
     Inv,
 )
 
@@ -135,6 +136,11 @@ device = torch.device("cuda")
         (CG(AdditiveSchwarz(torch.float32, BatchCUDSS(), CUDSS())), torch.float64),
         (CG(AdditiveSchwarz(torch.float32, BatchCUDSS(), CUDSS())), torch.float32),
         (CG(AdditiveSchwarz(torch.float64, Inv(), AMGX("AGGRESSIVE_L1_TRUNC"))), torch.float64),
+        (CG(HybridSchwarz(torch.float64, Inv(), CUDSS())), torch.float64),
+        (CG(HybridSchwarz(torch.float64, Inv(torch.float32), CUDSS())), torch.float64),
+        (CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS())), torch.float64),
+        (CG(HybridSchwarz(torch.float64, Inv(torch.bfloat16), CUDSS())), torch.float64),
+        # (CG(HybridSchwarz(torch.float32, LU(), CUDSS())), torch.float32),  # TODO: Why fails to converge?
     ],
 )
 # fmt: on

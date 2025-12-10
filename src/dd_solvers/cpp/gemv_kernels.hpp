@@ -30,4 +30,16 @@ void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  int n,
                                  int k);
 
+void gemvStridedBatchedDoubleBf16(const at::BFloat16* mat,
+                                  const double* vec,
+                                  double* out,
+                                  int n,
+                                  int k);
+
+void gemvStridedBatchedDoubleHalf(const at::Half* mat,
+                                  const double* vec,
+                                  double* out,
+                                  int n,
+                                  int k);
+
 #endif  // GEMV_KERNELS_HPP

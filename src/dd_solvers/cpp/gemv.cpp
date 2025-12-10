@@ -42,6 +42,16 @@ at::Tensor gemvStridedBatched(
     gemvStridedBatchedFloatHalf(mat.const_data_ptr<at::Half>(),
                                 vec.const_data_ptr<float>(),
                                 out.mutable_data_ptr<float>(), n, k);
+  } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
+             vec.scalar_type() == at::ScalarType::Double) {
+    gemvStridedBatchedDoubleBf16(mat.const_data_ptr<at::BFloat16>(),
+                                 vec.const_data_ptr<double>(),
+                                 out.mutable_data_ptr<double>(), n, k);
+  } else if (mat.scalar_type() == at::ScalarType::Half &&
+             vec.scalar_type() == at::ScalarType::Double) {
+    gemvStridedBatchedDoubleHalf(mat.const_data_ptr<at::Half>(),
+                                 vec.const_data_ptr<double>(),
+                                 out.mutable_data_ptr<double>(), n, k);
   } else {
     TORCH_CHECK(false, "Unsupported data type for matvec operation");
   }
