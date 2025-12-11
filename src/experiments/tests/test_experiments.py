@@ -14,7 +14,6 @@ def test_experiment_factory():
             d=2,
             m=4,
         ),
-        number_of_repetitions=3,
         problem_precision=np.float64,
         error_continuous_norms=(2,),
     )
@@ -37,6 +36,7 @@ def test_experiment_factory():
     )
 
     results = factory.run()
-    assert len(results) == 6
+    assert len(results) == 2
+    assert results["exception"].isnull().all()
     assert (results["residual norm"] < 1e-6).all()
     assert (results["error L2 norm"] < 0.5).all()

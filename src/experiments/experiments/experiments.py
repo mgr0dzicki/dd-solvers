@@ -36,7 +36,7 @@ class ExperimentFactory:
         test_case: TestCase,
         mesh_family: MeshFamily,
         polynomial_degree: int = 1,
-        number_of_repetitions: int = 3,
+        setup_repetitions: int = 3,
         solution_warmup_steps: int = 0,
         solution_measurement_steps: int = 1,
         solution_repetitions: int = 10,
@@ -47,10 +47,14 @@ class ExperimentFactory:
         self.test_case = test_case
         self.mesh_family = mesh_family
         self.polynomial_degree = polynomial_degree
-        self.number_of_repetitions = number_of_repetitions
+        self.setup_repetitions = setup_repetitions
+        assert self.setup_repetitions >= 1
         self.solution_warmup_steps = solution_warmup_steps
+        assert self.solution_warmup_steps >= 0
         self.solution_measurement_steps = solution_measurement_steps
+        assert self.solution_measurement_steps >= 1
         self.solution_repetitions = solution_repetitions
+        assert self.solution_repetitions >= 1
         self.problem_precision = problem_precision
         self.error_continuous_norms = error_continuous_norms
         self.random_rhs = random_rhs
@@ -71,9 +75,11 @@ class ExperimentFactory:
 
         results = []
         for experiment in tqdm.tqdm(self.experiments, desc="Running experiments"):
-            results += self._repeat_experiment_sandboxed(
-                experiment=experiment,
-                **all_parameters[experiment.fine_m],
+            results.append(
+                self._repeat_experiment_sandboxed(
+                    experiment=experiment,
+                    **all_parameters[experiment.fine_m],
+                )
             )
 
         return pd.DataFrame(results)
@@ -99,51 +105,76 @@ class ExperimentFactory:
         experiment: Experiment,
         discrete_problem: DiscreteProblem,
         real_solution_fun: dolfinx.fem.Function,
-    ) -> list[dict[str, any]]:
+    ) -> dict[str, any]:
         results = []
-        for rep in range(self.number_of_repetitions):
+        for rep in range(self.setup_repetitions):
             try:
-                result = self._run_experiment(
-                    experiment, discrete_problem, real_solution_fun
+                results.append(
+                    self._run_experiment(
+                        experiment=experiment,
+                        discrete_problem=discrete_problem,
+                        real_solution_fun=real_solution_fun,
+                        measure_solution_time=(rep == self.setup_repetitions - 1),
+                    )
                 )
                 exception = None
             except KeyboardInterrupt:
                 raise
             except Exception as e:
-                result = {}
                 exception = str(e)
             finally:
                 gc.collect()
                 torch.cuda.empty_cache()
 
-            results.append(
-                {
-                    "test case": self.test_case.name,
-                    "p": self.polynomial_degree,
-                    "mesh family": self.mesh_family.name,
-                    "fine m": experiment.fine_m,
-                    "solvers m": experiment.solvers_m,
-                    "coarse m": experiment.coarse_m,
-                    "solver": str(experiment.solver),
-                    "random rhs": self.random_rhs,
-                    "solution warmup steps": self.solution_warmup_steps,
-                    "solution measurement steps": self.solution_measurement_steps,
-                    "solution repetitions": self.solution_repetitions,
-                    **result,
-                    "repetition": rep,
-                    "exception": exception,
-                }
-            )
-
             if exception is not None:
                 break
-        return results
+
+        if len(results) == 0:
+            combined_result = {}
+        else:
+            combined_result = {
+                k: v for k, v in results[-1].items() if not k.endswith("time")
+            }
+            time_keys = [key for key in results[-1].keys() if key.endswith("time")]
+            times_keys = [key for key in results[-1].keys() if key.endswith("times")]
+            for key in time_keys:
+                combined_result[f"{key}s"] = [
+                    result[key]
+                    for result in results
+                    if key in result and result[key] is not None
+                ]
+            for key in times_keys:
+                combined_result[key] = sum(
+                    [
+                        result[key]
+                        for result in results
+                        if key in result and result[key] is not None
+                    ],
+                    [],
+                )
+
+        return {
+            "test case": self.test_case.name,
+            "p": self.polynomial_degree,
+            "mesh family": self.mesh_family.name,
+            "fine m": experiment.fine_m,
+            "solvers m": experiment.solvers_m,
+            "coarse m": experiment.coarse_m,
+            "solver": str(experiment.solver),
+            "random rhs": self.random_rhs,
+            "solution warmup steps": self.solution_warmup_steps,
+            "solution measurement steps": self.solution_measurement_steps,
+            "solution repetitions": self.solution_repetitions,
+            **combined_result,
+            "exception": exception,
+        }
 
     def _run_experiment(
         self,
         experiment: Experiment,
         discrete_problem: DiscreteProblem,
         real_solution_fun: dolfinx.fem.Function,
+        measure_solution_time: bool,
     ) -> dict[str, any]:
         dd_solver = experiment.coarse_m is not None and experiment.solvers_m is not None
 
@@ -210,23 +241,27 @@ class ExperimentFactory:
             rhs = rhs[perm]
         events[4].record()
 
-        solve_times = []
-        for _ in range(self.solution_repetitions):
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+        if measure_solution_time:
+            solve_times = []
+            for _ in range(self.solution_repetitions):
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
 
-            for _ in range(self.solution_warmup_steps):
-                solver.solve(rhs)
+                for _ in range(self.solution_warmup_steps):
+                    solver.solve(rhs)
 
-            start.record()
-            for _ in range(self.solution_measurement_steps):
-                sol, metadata = solver.solve(rhs)
-            end.record()
+                start.record()
+                for _ in range(self.solution_measurement_steps):
+                    sol, metadata = solver.solve(rhs)
+                end.record()
 
-            torch.cuda.synchronize()
-            solve_times.append(
-                start.elapsed_time(end) / self.solution_measurement_steps
-            )
+                torch.cuda.synchronize()
+                solve_times.append(
+                    start.elapsed_time(end) / self.solution_measurement_steps
+                )
+        else:
+            sol, metadata = solver.solve(rhs)
+            solve_times = []
 
         events[5].record()
         if dd_solver:
@@ -270,6 +305,6 @@ class ExperimentFactory:
             "matrix permute time": events[1].elapsed_time(events[2]),
             "solver setup time": events[2].elapsed_time(events[3]),
             "rhs copy and permute time": events[3].elapsed_time(events[4]),
-            "solve time": min(solve_times),
+            "solve times": solve_times,
             "solution permute and copy time": events[5].elapsed_time(events[6]),
         }

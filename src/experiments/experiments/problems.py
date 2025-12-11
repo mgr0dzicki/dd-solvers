@@ -24,6 +24,8 @@ Solution = Callable[[np.ndarray], np.ndarray]
 
 
 class TestCase(NamedTuple):
+    __test__ = False  # to prevent pytest from collecting this class
+
     name: str
     problem: Problem
     solution: Solution

@@ -159,29 +159,28 @@ class UniformMeshes(MeshFamily):
         for i in range(1, m + 1):
             self.s_meshes[i], self.s_mappings[i - 1] = self.s_meshes[i - 1].refine(1)
 
-        self.c_meshes = [
-            (
-                Mesh2D(
-                    dolfinx.mesh.create_unit_square(
-                        comm=MPI.COMM_WORLD,
-                        nx=2**i,
-                        ny=2**i,
-                        cell_type=dolfinx.mesh.CellType.quadrilateral,
-                    )
-                )
-                if d == 2
-                else Mesh3D(
-                    dolfinx.mesh.create_unit_cube(
-                        comm=MPI.COMM_WORLD,
-                        nx=2**i,
-                        ny=2**i,
-                        nz=2**i,
-                        cell_type=dolfinx.mesh.CellType.hexahedron,
-                    )
+        self.c_meshes = {}
+
+    def _create_c_mesh(self, level: int):
+        if self.d == 2:
+            return Mesh2D(
+                dolfinx.mesh.create_unit_square(
+                    comm=MPI.COMM_WORLD,
+                    nx=2**level,
+                    ny=2**level,
+                    cell_type=dolfinx.mesh.CellType.quadrilateral,
                 )
             )
-            for i in range(m + 1)
-        ]
+        else:
+            return Mesh3D(
+                dolfinx.mesh.create_unit_cube(
+                    comm=MPI.COMM_WORLD,
+                    nx=2**level,
+                    ny=2**level,
+                    nz=2**level,
+                    cell_type=dolfinx.mesh.CellType.hexahedron,
+                )
+            )
 
     @property
     def name(self):
@@ -193,6 +192,8 @@ class UniformMeshes(MeshFamily):
             return self.s_meshes[level]
         elif idx.startswith("C"):
             level = int(idx[1:])
+            if level not in self.c_meshes:
+                self.c_meshes[level] = self._create_c_mesh(level)
             return self.c_meshes[level]
         else:
             raise ValueError(f"Unknown mesh id {idx}")

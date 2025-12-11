@@ -16,11 +16,15 @@ cg_kwargs = {
 factory_kwargs = {
     "test_case": continuous_coefficient_2d if d == 2 else continuous_coefficient_3d,
     "polynomial_degree": p,
+    "setup_repetitions": 3,
+    "solution_warmup_steps": 0,
+    "solution_measurement_steps": 1,
+    "solution_repetitions": 10,
 }
 
 asm_factory_kwargs = {
     **factory_kwargs,
-    "number_of_repetitions": 3,
+    "setup_repetitions": 3,
     "solution_warmup_steps": 10,
     "solution_measurement_steps": 10,
     "solution_repetitions": 10,
@@ -31,9 +35,7 @@ solvers = [
     CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
 ]
 
-results_path = (
-    f"../results/experiment_solvers_d{d}_p{p}_f{fine_m}.csv"
-)
+results_path = f"../results/experiment_solvers_d{d}_p{p}_f{fine_m}.csv"
 print("results path: ", results_path)
 
 print("Generating mesh family...")
@@ -70,4 +72,4 @@ for coarse_m, solvers_m, fine_m_str in ms:
         )
 
 df = factory.run()
-df.to_csv(f"{results_path}.csv", index=False)
+df.to_csv(results_path, index=False)
