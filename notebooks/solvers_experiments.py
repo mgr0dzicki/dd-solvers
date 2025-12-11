@@ -16,7 +16,7 @@ cg_kwargs = {
 factory_kwargs = {
     "test_case": continuous_coefficient_2d if d == 2 else continuous_coefficient_3d,
     "polynomial_degree": p,
-    "setup_repetitions": 3,
+    "setup_repetitions": 1,
     "solution_warmup_steps": 0,
     "solution_measurement_steps": 1,
     "solution_repetitions": 10,
