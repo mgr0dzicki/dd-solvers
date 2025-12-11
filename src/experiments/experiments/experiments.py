@@ -1,5 +1,6 @@
 import copy
 import gc
+import datetime
 from typing import NamedTuple
 import numpy as np
 import pandas as pd
@@ -154,6 +155,7 @@ class ExperimentFactory:
                 )
 
         return {
+            "datetime": datetime.datetime.now(tz=datetime.UTC).isoformat(),
             "test case": self.test_case.name,
             "p": self.polynomial_degree,
             "mesh family": self.mesh_family.name,
