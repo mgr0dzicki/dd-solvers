@@ -21,9 +21,13 @@ factory_kwargs = {
     "solution_repetitions": 10,
 }
 
-solvers = [CUDSS()]
+solvers = []
 for amg_config in AMGX.config_names:
     solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
+
+# Should be the last one as it can leave the GPU memory in an inconsistent
+# state in case of OOM
+solvers.append(CUDSS())
 
 mesh_family = UniformMeshes(d=d, m=fine_m)
 
