@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 import dolfinx
+import gmsh
+from dolfinx.io import gmsh as gmshio
 from matplotlib import pyplot as plt
 from mpi4py import MPI
 import numpy as np
@@ -11,6 +13,7 @@ __all__ = [
     "Mesh3D",
     "MeshFamily",
     "UniformMeshes",
+    "UnstructuredMeshes",
 ]
 
 
@@ -92,6 +95,53 @@ class Mesh2D(Mesh):
                 cell_type=dolfinx.mesh.CellType.triangle,
             )
         )
+
+    def unit_square_unstructured(n: int):
+        gmsh.initialize()
+        gmsh.model.add("unit_square")
+
+        lc = 1.0 / n  # characteristic length
+        # Create corner points
+        p1 = gmsh.model.geo.addPoint(0.0, 0.0, 0.0, lc)
+        p2 = gmsh.model.geo.addPoint(1.0, 0.0, 0.0, lc)
+        p3 = gmsh.model.geo.addPoint(1.0, 1.0, 0.0, lc)
+        p4 = gmsh.model.geo.addPoint(0.0, 1.0, 0.0, lc)
+
+        # Create lines
+        l1 = gmsh.model.geo.addLine(p1, p2)  # bottom
+        l2 = gmsh.model.geo.addLine(p2, p3)  # right
+        l3 = gmsh.model.geo.addLine(p3, p4)  # top
+        l4 = gmsh.model.geo.addLine(p4, p1)  # left
+
+        loop = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+        surface = gmsh.model.geo.addPlaneSurface([loop])
+
+        # synchronize geometry
+        gmsh.model.geo.synchronize()
+
+        # --- Add physical groups (required by dolfinx.model_to_mesh) ---
+        # Physical group for the 2D domain
+        phys_domain = gmsh.model.addPhysicalGroup(2, [surface])
+        gmsh.model.setPhysicalName(2, phys_domain, "Domain")
+
+        # Physical groups for the 1D boundary segments (useful for BCs)
+        phys_bottom = gmsh.model.addPhysicalGroup(1, [l1])
+        gmsh.model.setPhysicalName(1, phys_bottom, "bottom")
+        phys_right = gmsh.model.addPhysicalGroup(1, [l2])
+        gmsh.model.setPhysicalName(1, phys_right, "right")
+        phys_top = gmsh.model.addPhysicalGroup(1, [l3])
+        gmsh.model.setPhysicalName(1, phys_top, "top")
+        phys_left = gmsh.model.addPhysicalGroup(1, [l4])
+        gmsh.model.setPhysicalName(1, phys_left, "left")
+
+        # Generate 2D mesh
+        gmsh.model.mesh.generate(2)
+
+        # Convert to dolfinx mesh (gdim=2)
+        res = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, 0, gdim=2)
+
+        gmsh.finalize()
+        return Mesh2D(res.mesh)
 
     @staticmethod
     def _element_to_segments(el):
@@ -230,3 +280,32 @@ class UniformMeshes(MeshFamily):
 
         from_flat_coords = UniformMeshes._flat_coords(from_mesh, m)
         return coords_to_mesh[from_flat_coords]
+
+
+class UnstructuredMeshes(MeshFamily):
+    def __init__(self, n: int):
+        self.n = n
+        self.mesh = Mesh2D.unit_square_unstructured(n)
+        self.refinement, self.mapping = self.mesh.refine()
+
+    @property
+    def name(self):
+        return f"unstructured({self.n})"
+
+    def __getitem__(self, idx):
+        if idx == "C":
+            return self.mesh
+        elif idx == "F":
+            return self.refinement
+        else:
+            raise ValueError(f"Unknown mesh id {idx}")
+
+    def get_mapping(self, from_mesh: str, to_mesh: str) -> np.ndarray:
+        if from_mesh == "C" and to_mesh == "C":
+            return np.arange(self.mesh.num_cells, dtype=np.int32)
+        elif from_mesh == "C" and to_mesh == "F":
+            return self.mapping
+        elif from_mesh == "F" and to_mesh == "F":
+            return np.arange(self.refinement.num_cells, dtype=np.int32)
+        else:
+            raise ValueError(f"Unsupported mapping from {from_mesh} to {to_mesh}")
