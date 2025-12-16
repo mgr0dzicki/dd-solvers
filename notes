@@ -1,11 +1,15 @@
 1. Czy dla nieregularnej siatki jest wieksza przewaga nad amgx?
     NIE
+    teoretycznie można, żeby pokazać, że metoda jest uniwersalna, ale czy warto?
 2. Czy w eksperymentach mozna sie ograniczyc do lokalnego solvera inv (pozostałe są czasochłonne i zawsze wolniejsze)?
 3. Jeśli chodzi o symetryzację przez lokalne - wtedy dodatkowe mnożenie przez A (prawda?)
 4. W csv przydałoby się appendowanie i aktualny commit czy coś takiego, karta na której leci eksperyment.
 5. Zobaczyć jak nowsze karty?
     RTX 6000 PRO za nowe (trzeba by było nowszy kontener...)
+    H100 SXM nie wystartowało...
 6. Coś nowszego niż amgx? BoomerAMG (gemini mowi jak odpalic w petsc)
     być może ten boomeramg jest rzeczywiście narzucający się, jak używamy fenicsa i jest to naturalne porównanie...
 7. Skalowanie? Wypadałoby... ale wtedy chyba odpada numba, bo ładowanie kernela trwa za wolno...
     ani słabe ani silne, tylko po prostu Dofs/seconds w zależności od wielkości problemu dla ustalonego p
+8. Większe p?
+9. ta sama liczba elementów w rzadkiej w hybrydowym?
