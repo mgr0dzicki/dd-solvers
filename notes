@@ -1,3 +1,4 @@
 1. Czy dla nieregularnej siatki jest wieksza przewaga nad amgx?
 2. Czy w eksperymentach mozna sie ograniczyc do lokalnego solvera inv (pozostałe są czasochłonne i zawsze wolniejsze).
 3. Jeśli chodzi o symetryzację przez lokalne - wtedy dodatkowe mnożenie przez A.
+4. W csv przydałoby się appendowanie i aktualny commit czy coś takiego

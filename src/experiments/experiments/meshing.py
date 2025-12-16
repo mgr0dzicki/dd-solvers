@@ -303,7 +303,7 @@ class UnstructuredMeshes(MeshFamily):
     def get_mapping(self, from_mesh: str, to_mesh: str) -> np.ndarray:
         if from_mesh == "C" and to_mesh == "C":
             return np.arange(self.mesh.num_cells, dtype=np.int32)
-        elif from_mesh == "C" and to_mesh == "F":
+        elif from_mesh == "F" and to_mesh == "C":
             return self.mapping
         elif from_mesh == "F" and to_mesh == "F":
             return np.arange(self.refinement.num_cells, dtype=np.int32)
