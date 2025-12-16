@@ -139,42 +139,10 @@ def plot_clustered_stacked(
     return ax
 
 
-def format_mesh(mesh: tuple[int, str]):
-    k, m = mesh
+# def format_mesh(mesh: tuple[int, str]):
+#     k, m = mesh
+#     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
+
+def format_mesh(mesh: str):
+    m, k = mesh[0], int(mesh[1:])
     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
-
-
-def get_meshes(row: pd.Series):
-    case = row["case"]
-
-    fine_m = row["fine m"]
-    solvers_m = row["solvers m"]
-    coarse_m = row["coarse m"]
-
-    def S(k):
-        return (k, "S")
-
-    def C(k):
-        return (k, "C")
-
-    fine_mesh = S(fine_m - 1)
-    if case == "cubical":
-        solvers_mesh = C(solvers_m)
-        coarse_mesh = C(coarse_m)
-    elif case == "simplicial":
-        solvers_mesh = S(solvers_m - 1)
-        coarse_mesh = S(coarse_m - 1)
-    elif case == "mixed":
-        solvers_mesh = S(solvers_m - 1)
-        coarse_mesh = C(coarse_m)
-    else:
-        solvers_mesh = (-1, "D")
-        coarse_mesh = (-1, "D")
-
-    return pd.Series(
-        {
-            "coarse m": coarse_mesh,
-            "solvers m": solvers_mesh,
-            "fine m": fine_mesh,
-        }
-    )
