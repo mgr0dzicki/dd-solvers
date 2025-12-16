@@ -144,5 +144,7 @@ def plot_clustered_stacked(
 #     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
 
 def format_mesh(mesh: str):
+    if len(mesh) == 1:
+        return mesh
     m, k = mesh[0], int(mesh[1:])
     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
