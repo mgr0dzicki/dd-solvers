@@ -32,9 +32,12 @@ solvers = [
     CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
     CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
     CG(AMGX("L1_TRUNC", torch.float32), **cg_kwargs),
+    CG(AMGX("L1_TRUNC"), **cg_kwargs),
+    AMGX("CG_L1_TRUNC"),
     CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs, bsr_matmul=False),
     CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs, bsr_matmul=False),
     CG(AMGX("L1_TRUNC", torch.float32), **cg_kwargs, bsr_matmul=False),
+    CG(AMGX("L1_TRUNC"), **cg_kwargs, bsr_matmul=False),
 ]
 
 results_path = f"../results/experiment_scaling_d{d}_p{p}.csv"
