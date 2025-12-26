@@ -14,3 +14,25 @@
     ani słabe ani silne, tylko po prostu Dofs/seconds w zależności od wielkości problemu dla ustalonego p
 8. Większe p?
 9. ta sama liczba elementów w rzadkiej w hybrydowym?
+10. sprawdzić AmgX z jego własnym CG!
+
+Tematy:
+- o czym praca? szybki solver vs zbadanie metody
+  zacznijmy przy obecnym układzie - najpierw metoda, potem szybki solver
+- co z wyższymi p? klasyczne amg już nie daje rady w ogóle...
+- czy w eksperymentach wystarczy lokalny solver inv?
+  powiedzieć jakie sprawdzałem i że były wolniejsze
+- zostawić ciągły współczynnik i powiedzieć, że dla nieciągłego też działa. Wyjaśnić to we wstępie do sekcji eksperymentów, podobnie inne założenia, że kwadrat, jednorodna siatka, odwołać do prac, twierdzenie nieprecyzyjnie najpierw, tylko słowami odniesienie, przy definiowaniu metody. W eksperymentach wytłumaczć się na podstawie twierdzeń
+- ogólniej: jakie eksperymenty zawrzeć? co pokazać?
+  - chyba dobrze by było DoFs/s w zależności od wielkości problemu dla różnych p (porównanie kilku niewiele mówi)
+  - olać twierdzenie, czy zależność uwarunkowania w eksperymentach?
+- czy warto pokazywać nieregularną siatkę?
+  nie, tylko napisać, i uwypuklić, że jest uniwersalnie,
+- są już szczegóły mikrograntów! https://inicjatywadoskonalosci.uw.edu.pl/idub2026/dzialania/mikrogranty-phd/
+  - można na konferencję albo wyjazd
+  - na badania od drugiego roku
+- Preludium
+  pierwszy grant
+- szukać konferencji, żeby opowiedzieć o magisterce _na digest_ - informacje o książkach, konferencjach
+ - rozglądać się
+ - jest konferencja o multigridzie, coś tam zrobić z multigridem
