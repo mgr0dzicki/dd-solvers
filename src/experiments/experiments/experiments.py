@@ -167,6 +167,8 @@ class ExperimentFactory:
             "solution warmup steps": self.solution_warmup_steps,
             "solution measurement steps": self.solution_measurement_steps,
             "solution repetitions": self.solution_repetitions,
+            "DoFs": discrete_problem.exact_form_matrix.shape[0],
+            "matrix nnz": discrete_problem.exact_form_matrix.nnz,
             **combined_result,
             "exception": exception,
         }
