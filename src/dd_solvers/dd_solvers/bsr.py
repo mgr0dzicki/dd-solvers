@@ -13,15 +13,11 @@ def ceildiv(a: int, b: int):
 
 
 class FastBSR:
-    def __init__(self, matrix: torch.Tensor, backend: str | None = None):
+    def __init__(
+        self, matrix: torch.Tensor, backend: str = "row_per_thread_irrespective"
+    ):
         assert matrix.is_cuda
         assert matrix.layout is torch.sparse_bsr
-
-        if backend is None:
-            bs = matrix.values().shape[1]
-            backend = (
-                "row_per_thread_irrespective" if bs < 15 else "row_per_thread_sync"
-            )
 
         self._matmul_backend = self.matmul_backends[backend](matrix)
 
@@ -36,12 +32,18 @@ class FastBSR:
         return matmul
 
     @staticmethod
+    def _kernel_signature(matrix: torch.Tensor) -> str:
+        it = str(matrix.col_indices().dtype).split(".")[-1]
+        vt = str(matrix.values().dtype).split(".")[-1]
+        return f"void({it}[:], {it}[:], {vt}[:, :, :], {vt}[:], {vt}[:])"
+
+    @staticmethod
     def _matmul_row_per_thread_irrespective(
         matrix: torch.Tensor, thread_block_size: int = 256
     ) -> MatmulBackend:
         bs = matrix.values().shape[1]
 
-        @cuda.jit
+        @cuda.jit(FastBSR._kernel_signature(matrix))
         def bsrmv_row_per_thread_irrespective_kernel(
             crow_indices, col_indices, values, x, output
         ):
@@ -80,7 +82,7 @@ class FastBSR:
         bs = matrix.values().shape[1]
         initial_stride = 1 << int(math.ceil(math.log2((32 / bs) / 2)))
 
-        @cuda.jit
+        @cuda.jit(FastBSR._kernel_signature(matrix))
         def bsrmv_column_by_column_kernel(crow_indices, col_indices, values, x, output):
             target_block_row = cuda.grid(1) // 32
             lane = cuda.threadIdx.x % 32
@@ -127,7 +129,7 @@ class FastBSR:
         bs = matrix.values().shape[1]
         initial_stride = 1 << int(math.ceil(math.log2((32 / bs) / 2)))
 
-        @cuda.jit
+        @cuda.jit(FastBSR._kernel_signature(matrix))
         def bsrmv_block_by_block_kernel(crow_indices, col_indices, values, x, output):
             target_block_row = cuda.grid(1) // 32
             lane = cuda.threadIdx.x % 32
@@ -171,7 +173,7 @@ class FastBSR:
     def _matmul_row_per_thread(matrix: torch.Tensor):
         bs = matrix.values().shape[1]
 
-        @cuda.jit
+        @cuda.jit(FastBSR._kernel_signature(matrix))
         def bsrmv_row_per_thread_kernel(crow_indices, col_indices, values, x, output):
             target_block_row = cuda.blockIdx.x
             r = cuda.threadIdx.x
@@ -201,7 +203,7 @@ class FastBSR:
     def _matmul_row_per_thread_sync(matrix: torch.Tensor):
         bs = matrix.values().shape[1]
 
-        @cuda.jit
+        @cuda.jit(FastBSR._kernel_signature(matrix))
         def bsrmv_row_per_thread_sync_kernel(
             crow_indices, col_indices, values, x, output
         ):
