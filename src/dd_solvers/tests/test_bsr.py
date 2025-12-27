@@ -220,6 +220,7 @@ def test_csr_to_bsr_small(dtype: torch.dtype):
             device=device,
         ),
     )
+    assert matrix_bsr.values().stride() == (4, 1, 2)  # column-major storage
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -232,3 +233,4 @@ def test_csr_to_bsr_medium(dtype: torch.dtype):
     assert matrix_bsr.dtype == dtype
     assert matrix_bsr.device.type == device.type
     assert allclose(matrix_bsr.to_dense(), matrix_expected.to_dense())
+    assert matrix_bsr.values().stride() == (9, 1, 3)

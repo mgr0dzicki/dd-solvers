@@ -27,6 +27,7 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int m = csrMatrix.size(0);
   int n = csrMatrix.size(1);
   int mb = (m + blockSize - 1) / blockSize;
+  cusparseDirection_t blockDir = CUSPARSE_DIRECTION_COLUMN;
 
   at::Tensor values = csrMatrix.values();
   at::Tensor rowStart = csrMatrix.crow_indices().to(at::kInt);
@@ -35,12 +36,12 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int bufferSize;
   if (values.dtype() == at::kFloat) {
     CHECK_CUSPARSE(cusparseScsr2gebsr_bufferSize(
-        cusparseHandle, CUSPARSE_DIRECTION_ROW, m, n, descrA,
+        cusparseHandle, blockDir, m, n, descrA,
         values.data_ptr<float>(), rowStart.data_ptr<int>(),
         colIndices.data_ptr<int>(), blockSize, blockSize, &bufferSize));
   } else if (values.dtype() == at::kDouble) {
     CHECK_CUSPARSE(cusparseDcsr2gebsr_bufferSize(
-        cusparseHandle, CUSPARSE_DIRECTION_ROW, m, n, descrA,
+        cusparseHandle, blockDir, m, n, descrA,
         values.data_ptr<double>(), rowStart.data_ptr<int>(),
         colIndices.data_ptr<int>(), blockSize, blockSize, &bufferSize));
   } else {
@@ -58,7 +59,7 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int nnzb;
   int* nnzTotalDevHostPtr = &nnzb;
   CHECK_CUSPARSE(cusparseXcsr2gebsrNnz(
-      cusparseHandle, CUSPARSE_DIRECTION_ROW, m, n, descrA,
+      cusparseHandle, blockDir, m, n, descrA,
       rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), descrC, bsrRowPtrC,
       blockSize, blockSize, nnzTotalDevHostPtr, buffer));
 
@@ -78,19 +79,19 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int* bsrColIndC = bsrColInd.mutable_data_ptr<int>();
 
   at::Tensor bsrValues =
-      at::empty({nnzb, blockSize, blockSize},
+      at::empty_strided({nnzb, blockSize, blockSize}, {blockSize * blockSize, 1, blockSize}, // column-major
                 at::TensorOptions().dtype(values.dtype()).device(at::kCUDA));
   void* bsrValC = bsrValues.mutable_data_ptr();
 
   if (values.dtype() == at::kFloat) {
     CHECK_CUSPARSE(cusparseScsr2gebsr(
-        cusparseHandle, CUSPARSE_DIRECTION_ROW, m, n, descrA,
+        cusparseHandle, blockDir, m, n, descrA,
         values.data_ptr<float>(), rowStart.data_ptr<int>(),
         colIndices.data_ptr<int>(), descrC, reinterpret_cast<float*>(bsrValC),
         bsrRowPtrC, bsrColIndC, blockSize, blockSize, buffer));
   } else {
     CHECK_CUSPARSE(cusparseDcsr2gebsr(
-        cusparseHandle, CUSPARSE_DIRECTION_ROW, m, n, descrA,
+        cusparseHandle, blockDir, m, n, descrA,
         values.data_ptr<double>(), rowStart.data_ptr<int>(),
         colIndices.data_ptr<int>(), descrC, reinterpret_cast<double*>(bsrValC),
         bsrRowPtrC, bsrColIndC, blockSize, blockSize, buffer));
