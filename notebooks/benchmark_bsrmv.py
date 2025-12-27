@@ -11,20 +11,6 @@ from benchmark_utils import timeit
 meshes_2d = UniformMeshes(d=2, m=11)
 meshes_3d = UniformMeshes(d=3, m=7)
 
-# problems = [
-#     ("2D", 11, 1),
-#     ("2D", 10, 1),
-#     ("2D", 10, 2),
-#     ("2D", 10, 3),
-#     ("2D", 9, 4),
-#     ("2D", 8, 5),
-#     ("3D", 7, 1),
-#     ("3D", 6, 1),
-#     ("3D", 6, 2),
-#     ("3D", 5, 2),
-#     ("3D", 5, 3),
-# ]
-
 problems = [
     ("2D", "S11", 1),
     ("2D", "S10", 2),
@@ -37,7 +23,10 @@ problems = [
 ]
 
 algorithms = {
-    f"bsr_{backend}": functools.partial(dd_solvers.FastBSR, backend=backend)
+    f"bsr_{backend}": functools.partial(
+        dd_solvers.FastBSR,
+        backend=backend,
+    )
     for backend in dd_solvers.FastBSR.matmul_backends.keys()
 }
 algorithms["csr_cusparse"] = lambda mat: mat
@@ -87,8 +76,8 @@ for problem in tqdm(problems):
 
             mat_alg = algorithm_constructor(mat)
             times = [
-                timeit(lambda: mat_alg @ x, warmup_iters=5, iters=20, repetitions=1)
-                for _ in range(10)
+                timeit(lambda: mat_alg @ x, warmup_iters=5, iters=10, repetitions=5)
+                for _ in range(5)
             ]
             error_norm = torch.norm(mat_alg @ x - mat @ x)
             results.append(

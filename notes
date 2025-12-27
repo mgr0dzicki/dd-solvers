@@ -16,6 +16,8 @@
 9. ta sama liczba elementów w rzadkiej w hybrydowym?
 10. sprawdzić AmgX z jego własnym CG!
 11. Czy dawać AmgX spermutowaną macierz, czy nie?
+12. może bandwidth zmierzony zamiast teoretycznego? nvbandwidth daje 809GB/s na kopiowanie (trzeba x2)?
+ale to mniej, niż wychodzi z moich pomiarów gemv...
 
 Tematy:
 - o czym praca? szybki solver vs zbadanie metody
