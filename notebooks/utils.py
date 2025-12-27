@@ -148,3 +148,13 @@ def format_mesh(mesh: str):
         return mesh
     m, k = mesh[0], int(mesh[1:])
     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
+
+
+def safe_map(func):
+    def wrapper(x):
+        try:
+            return func(x)
+        except Exception:
+            return None
+
+    return wrapper
