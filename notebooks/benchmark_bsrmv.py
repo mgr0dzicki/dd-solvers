@@ -8,8 +8,8 @@ from experiments import *
 import dd_solvers
 from benchmark_utils import timeit
 
-meshes_2d = UniformMeshes(d=2, m=10)  # TODO: 11 on A100
-meshes_3d = UniformMeshes(d=3, m=6)  # TODO: 7 on A100
+meshes_2d = UniformMeshes(d=2, m=11)
+meshes_3d = UniformMeshes(d=3, m=7)
 
 # problems = [
 #     ("2D", 11, 1),
