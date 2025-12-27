@@ -936,7 +936,7 @@ class AMGX(SparseSolver):
         "L1_TRUNC": {
             "config_version": 2,
             "solver": {
-                "scope": "amg_solver",
+                "scope": "main",
                 "interpolator": "D2",
                 "solver": "AMG",
                 "interp_max_elements": 4,
