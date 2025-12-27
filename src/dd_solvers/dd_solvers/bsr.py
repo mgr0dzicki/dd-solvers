@@ -1,11 +1,7 @@
 from typing import Callable
 import torch
 import math
-from numba import cuda, types
-import cupy as cp
-import re
-import ctypes
-import numpy as np
+from numba import cuda
 
 __all__ = ["FastBSR"]
 
@@ -45,82 +41,34 @@ class FastBSR:
     ) -> MatmulBackend:
         bs = matrix.values().shape[1]
 
-        # Define types for pointers
-        f64_ptr = types.CPointer(types.float64)
-        i32_ptr = types.CPointer(types.int32)
-
-        # 1. Rewrite kernel to accept raw pointers and explicit sizes
-        # Signature: (crow_ptr, col_ptr, val_ptr, x_ptr, out_ptr, num_rows, bs)
-        @cuda.jit(types.void(i32_ptr, i32_ptr, f64_ptr, f64_ptr, f64_ptr, types.int32, types.int32))
-        def bsrmv_raw(crow_p, col_p, val_p, x_p, out_p, num_rows, bs):
+        @cuda.jit
+        def bsrmv_row_per_thread_irrespective_kernel(
+            crow_indices, col_indices, values, x, output
+        ):
             target_row = cuda.grid(1)
             target_block_row = target_row // bs
-
-            if target_block_row >= num_rows:
+            if target_block_row >= crow_indices.size - 1:
                 return
 
-            # In Numba, pointers support array-like indexing: p[i]
-            # Note: We must manage 3D indexing manually since we have a flat pointer
             r = target_row % bs
-            first_block = crow_p[target_block_row]
-            last_block = crow_p[target_block_row + 1]
+            first_block = crow_indices[target_block_row]
+            last_block = crow_indices[target_block_row + 1]
 
             local_out = 0.0
             for block in range(first_block, last_block):
-                col_offset = col_p[block] * bs
+                col_offset = col_indices[block] * bs
                 for c in range(bs):
-                    # Manual 3D index: [block, r, c] -> flat index
-                    # Assuming values is (num_blocks, bs, bs) C-contiguous
-                    val_idx = (block * bs * bs) + (r * bs) + c
-
-                    A_elem = val_p[val_idx]
-                    x_elem = x_p[col_offset + c]
+                    A_elem = values[block, r, c]
+                    x_elem = x[col_offset + c]
                     local_out += A_elem * x_elem
-
-            out_p[target_row] = local_out
-
-        # 2. Get PTX
-        sig = (i32_ptr, i32_ptr, f64_ptr, f64_ptr, f64_ptr, types.int32, types.int32)
-        ptx_code = bsrmv_raw.inspect_asm(sig)
-        # Find the mangled kernel name using Regex
-        # Looks for: .visible .entry _Z12kernel_name... (
-        match = re.search(r"\.visible\s+\.entry\s+(\S+)\s*\(", ptx_code)
-
-        if not match:
-            raise RuntimeError("Could not find kernel entry point in PTX code.")
-
-        kernel_name = match.group(1)
-        print(f"Found kernel name: {kernel_name}")
-
-        # 3. Load using Low-Level Module API (This accepts bytes!)
-        module = cp.cuda.function.Module()
-        module.load(ptx_code.encode('utf-8'))
-        raw_func = module.get_function(kernel_name)
+            output[target_row] = local_out
 
         def bsrmv_row_per_thread_irrespective(x):
             output = torch.empty_like(x)
-
-            # Calculate grid
-            num_rows = matrix.shape[0] # assuming matrix is available in scope or passed
-            bs = matrix.values().shape[1]
-            grid_size = (num_rows + 256 - 1) // 256
-
-            # 4. Launch passing raw memory addresses (integers)
-            # Args: (crow_ptr, col_ptr, val_ptr, x_ptr, out_ptr, num_rows, bs)
-            # Note: arg_list must be a tuple
-            args = (
-                matrix.crow_indices().data_ptr(),
-                matrix.col_indices().data_ptr(),
-                matrix.values().data_ptr(),
-                x.data_ptr(),
-                output.data_ptr(),
-                np.int32(matrix.crow_indices().size(0) - 1), # num_rows (blocks)
-                np.int32(bs)
-            )
-
-            # raw_func(grid, block, args_tuple)
-            raw_func((grid_size,), (256,), args)
-
+            grid_size = ceildiv(matrix.shape[0], thread_block_size)
+            bsrmv_row_per_thread_irrespective_kernel[
+                (grid_size,), (thread_block_size,)
+            ](matrix.crow_indices(), matrix.col_indices(), matrix.values(), x, output)
             return output
 
         return bsrmv_row_per_thread_irrespective
