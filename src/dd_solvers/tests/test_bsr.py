@@ -144,7 +144,7 @@ def allclose(a: torch.Tensor, b: torch.Tensor) -> bool:
     return torch.allclose(a, b, atol=atol)
 
 
-@pytest.mark.parametrize("dtype", [torch.float64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("backend", FastBSR.matmul_backends.keys())
 def test_bsr_matmul_small(backend: str, dtype: torch.dtype):
     torch.manual_seed(hash(f"{backend}_{dtype}"))
@@ -158,7 +158,7 @@ def test_bsr_matmul_small(backend: str, dtype: torch.dtype):
     assert allclose(result, expected), "invalid BSR matmul result"
 
 
-@pytest.mark.parametrize("dtype", [torch.float64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("backend", FastBSR.matmul_backends.keys())
 def test_bsr_matmul_large(backend: str, dtype: torch.dtype):
     torch.manual_seed(hash(f"{backend}_{dtype}"))
@@ -193,7 +193,7 @@ def test_bsr_matmul_large(backend: str, dtype: torch.dtype):
     assert allclose(result, expected), "invalid BSR matmul result"
 
 
-@pytest.mark.parametrize("dtype", [torch.float64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_csr_to_bsr_small(dtype: torch.dtype):
     # 1 2 0 0
     # 0 3 0 0
@@ -222,7 +222,7 @@ def test_csr_to_bsr_small(dtype: torch.dtype):
     )
 
 
-@pytest.mark.parametrize("dtype", [torch.float64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_csr_to_bsr_medium(dtype: torch.dtype):
     matrix_csr = matrix.to_dense().to_sparse_csr().to(device=device, dtype=dtype)
 
