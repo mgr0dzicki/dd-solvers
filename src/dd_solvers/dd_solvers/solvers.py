@@ -953,6 +953,38 @@ class AMGX(SparseSolver):
                 "max_levels": 50,
                 "postsweeps": 1,
                 "cycle": "V",
+                "monitor_residual": 0,
+            },
+        },
+        "CG_L1_TRUNC": {
+            "config_version": 2,
+            "solver": {
+                "scope": "main",
+                "solver": "PCG",
+                "max_iters": 2000,
+                "monitor_residual": 1,
+                "convergence": "RELATIVE_INI",
+                "tolerance": 1e-9,
+                "norm": "L2",
+                "preconditioner": {
+                    "scope": "amg_solver",
+                    "interpolator": "D2",
+                    "solver": "AMG",
+                    "interp_max_elements": 4,
+                    "smoother": {
+                        "relaxation_factor": 1,
+                        "scope": "jacobi",
+                        "solver": "JACOBI_L1",
+                    },
+                    "presweeps": 1,
+                    "coarsest_sweeps": 1,
+                    "coarse_solver": "NOSOLVER",
+                    "max_iters": 1,
+                    "max_row_sum": 0.9,
+                    "max_levels": 50,
+                    "postsweeps": 1,
+                    "cycle": "V",
+                },
             },
         },
         # AMG_CLASSICAL_AGGRESSIVE_L1
@@ -1071,6 +1103,7 @@ class AMGX(SparseSolver):
         self.matrix = pyamgx.Matrix().create(self.rsc, mode=self.mode)
         self.b = pyamgx.Vector().create(self.rsc, mode=self.mode)
         self.x = pyamgx.Vector().create(self.rsc, mode=self.mode)
+        self.x.set_zero(matrix.shape[1], block_dim=1)
 
         self.matrix.upload(
             row_ptrs=matrix.crow_indices().to(torch.int32),
@@ -1085,8 +1118,7 @@ class AMGX(SparseSolver):
         rhs_lower = rhs.to(self.precision)
 
         self.b.upload_raw(rhs_lower.data_ptr(), rhs.shape[0])
-        self.x.set_zero(rhs.shape[0], block_dim=1)
-        self.solver.solve(self.b, self.x)
+        self.solver.solve(self.b, self.x, zero_initial_guess=True)
         x_lower = torch.empty_like(rhs_lower)
         self.x.download_raw(x_lower.data_ptr())
 

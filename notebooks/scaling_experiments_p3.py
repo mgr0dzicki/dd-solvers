@@ -29,19 +29,26 @@ asm_factory_kwargs = {
 }
 
 solvers = [
-    CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
-    CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
-    CG(AMGX("L1_TRUNC", torch.float32), **cg_kwargs)
+    # CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
+    # CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
+    CG(AMGX("L1_TRUNC", torch.float32), **cg_kwargs),
+    CG(AMGX("L1_TRUNC"), **cg_kwargs),
+    AMGX("CG_L1_TRUNC"),
+    # CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs, bsr_matmul=False),
+    # CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs, bsr_matmul=False),
+    CG(AMGX("L1_TRUNC", torch.float32), **cg_kwargs, bsr_matmul=False),
+    CG(AMGX("L1_TRUNC"), **cg_kwargs, bsr_matmul=False),
 ]
 
 results_path = f"../results/experiment_scaling_d{d}_p{p}.csv"
 print("results path: ", results_path)
 
 print("Generating mesh family...")
-mesh_family = UniformMeshes(d=d, m=9)
+mesh_family = UniformMeshes(d=d, m=7)
 factory = ExperimentFactory(**factory_kwargs, mesh_family=mesh_family)
 
-ms = [(f"C{m}", f"C{m}", f"S{m}") for m in range(4, 9 + 1)]
+# ms = [(f"C{m}", f"C{m}", f"S{m}") for m in range(4, 9 + 1)]
+ms = [(f"C{m}", f"C{m}", f"S{m}") for m in range(4, 7 + 1)]
 
 for coarse_m, solvers_m, fine_m_str in ms:
     for solver in solvers:
