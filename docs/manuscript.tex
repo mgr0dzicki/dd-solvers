@@ -754,26 +754,31 @@ dependencies are specified in the accompanying \texttt{Dockerfile}.
 \subsection{Solvers Overview}
 \label{sec:solvers-overview}
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=\textwidth]{solvers-uml}
-%   \caption{Hierarchy of solvers. Solid lines indicate inheritance, dashed lines
-%   -- composition.}
-%   \label{fig:solvers-uml}
-% \end{figure}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{solvers-uml}
+  \caption{Hierarchy of solvers. Solid lines indicate inheritance, dashed lines
+  -- composition.}
+  \label{fig:solvers-uml}
+\end{figure}
 
 The structure of the \texttt{dd\_solvers} package is illustrated in
-Figure~\ref{fig:solvers-uml}. It defines three abstract classes -- \verb|SparseSolver|,
-\verb|DenseBatchSolver| and \verb|SparseBatchSolver| -- which specify the
+Figure~\ref{fig:solvers-uml}. It defines three abstract base classes -- \verb|SparseSolver|,
+\verb|DenseBatchSolver| and \verb|SparseBatchSolver| -- which specify
 interfaces for solvers handling a single CSR matrix, a batch of dense matrices,
 and a batch of CSR matrices, respectively. Because solvers of the same type share
 a common interface, they can be interchanged easily, facilitating performance
 comparisons.
 
-At the core of the package is \texttt{ASM}, in which we implement the preconditioner
-described in Algorithms~\ref{preconditioner-setup-pseudocode}
-and~\ref{preconditioner-M-pseudocode}. The details are discussed
-in Section~\ref{sec:asm-preconditioner}. \texttt{ASM} is parametrized by
+At the core of the package is the abstract class \texttt{SchwarzOperator},
+which encapsulates the shared components of the additive and hybrid Schwarz
+preconditioners, particularly the setup phase (Algorithm~\ref{preconditioner-setup-pseudocode}).
+The specific actions of $\bm{M_{add}}$ and $\bm{M_{hyb}^{loc}}$
+(Algorithms~\ref{preconditioner-M-pseudocode} and~\ref{preconditioner-M-hyb-pseudocode})
+are implemented in \texttt{AdditiveSchwarz} and \texttt{HybridSchwarz} classes, respectively;
+both derive from \texttt{SchwarzOperator}. The details are discussed
+in Section~\ref{sec:asm-preconditioner}.
+Schwarz operators are parametrized by
 the choice of coarse and local solvers: the coarse solver must subclass
 \texttt{SparseSolver}, while the local solver
 may be either a \texttt{DenseBatchSolver} or a \texttt{SparseBatchSolver}.
@@ -781,25 +786,26 @@ Dense batch solvers are preferable for small local problems (e.g.
 $\mathcal{T}_H=\mathcal{T}_h$), whereas sparse solvers suit larger subdomains
 (e.g. $\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}$).
 
-Since \texttt{ASM} is a preconditioner, it must
+Since Schwarz operators are preconditioners, they must
 be used in conjunction with an iterative method. Following Section~\ref{sec:additive-schwarz-method}
-we employ the Preconditioned Conjugate Gradient method \cite[Chapter~9.2]{Saad}.
-As it is not provided by either PyTorch or cuSPARSE, we implement it ourselves
-in the \texttt{CG} class. Any \verb|SparseSolver| can serve as
-a~preconditioner; setting it to \verb|None| (default) yields an unpreconditioned CG solver.
+we employ the Preconditioned Conjugate Gradient (PCG) method.
+As a native PCG implementation is available in neither PyTorch nor cuSPARSE, we
+provide a custom implementation in the \texttt{CG} class.
+Any \verb|SparseSolver| can serve as a~preconditioner; setting this parameter
+to \verb|None| (default) yields an unpreconditioned CG solver.
 The implementation is described in Section~\ref{sec:cg-method}.
 
 In \verb|CUDSS| solver we provide a Python interface (with a C++ backend) to
-the NVIDIA cuDSS library (v0.6.0)~\cite{cudss}, which
+the NVIDIA cuDSS library (v0.7.1\todo{sprawdz wersje})~\cite{cudss}, which
 is a a high-performance direct sparse solver. As \verb|CUDSS| implements the \texttt{SparseSolver}
-interface, it can be used either as the coarse solver within \texttt{ASM}
+interface, it can be used either as the coarse solver within \texttt{SchwarzOperator}
 or as a~standalone solver for \eqref{auf}.
 NVIDIA cuDSS can employ more efficient algorithms when the matrix
 is symmetric and positive definite. As it is the case for
 the stiffness matrix~$\bm{A}$, as well as for the coarse solver matrix $\bm{A_C}$,
 this option is enabled.
 
-Available dense batch solvers for the \verb|ASM| local subproblems are
+Available dense batch solvers for the \verb|SchwarzOperator| local subproblems are
 \texttt{LU}, \texttt{Cholesky} and \texttt{Inv}, which implement LU decomposition,
 Cholesky factorization and direct multiplication by the inverse, respectively.
 The first two are thin wrappers around PyTorch's built-in batched solvers,
@@ -819,15 +825,15 @@ in Section \ref{sec:amgx-preconditioner}.
 
 As will be later demonstrated in Chapter~\ref{chap:experiments}, applying the preconditioner
 in lower precision than the original matrix can deliver a significant performance
-improvement. Accordingly, we supplement the ASM
-preconditioner with two levels of precision control. First, the \texttt{precision}
-attribute of the \texttt{ASM} class may be set to either \verb|float64| or
+improvement. Accordingly, we supplement the Schwarz
+preconditioners with two levels of precision control. First, the \texttt{precision}
+attribute of the \texttt{SchwarzOperator} class may be set to either \verb|float64| or
 \verb|float32|, which dictates the precision of the entire preconditioner
 -- including both coarse and local solvers. Second, when the batch solver is a
 direct inverse, the \verb|precision| attribute of the \texttt{Inv} class can
-reduce the local solver's precision to 16 bits (\verb|bfloat16| or
-\verb|float16|). We also allow the \verb|AMGX| preconditioner to run in
-either single (\verb|float32|) or double (\verb|float64|) precision.
+reduce the local solver's precision to 32 bits (\verb|float32|) or even 16 bits
+(\verb|bfloat16| or \verb|float16|). We also allow the \verb|AMGX| preconditioner
+to run in either single (\verb|float32|) or double (\verb|float64|) precision.
 
 We conclude this section by illustrating the flexibility of the \texttt{dd\_solvers}
 package with examples of constructing \texttt{SparseSolver} instances in
@@ -849,19 +855,19 @@ s2 = CG()
 # Example 3: PCG with AmgX preconditioner applied in single precision.
 s3 = CG(AMGX(precision=torch.float32))
 
-# Example 4: PCG with ASM preconditioner using sparse direct solvers
-# for both coarse and local problems.
-s4 = CG(ASM(
+# Example 4: PCG with hybrid Schwarz preconditioner using sparse
+# direct solvers for both coarse and local problems.
+s4 = CG(HybridSchwarz(
     coarse_solver=CUDSS(),
     local_solver=BatchCUDSS(),
 ))
 
-# Example 5: PCG with ASM preconditioner applied in single precision,
-# using dense local solver in a 16-bit precision.
-s5 = CG(ASM(
+# Example 5: PCG with additive Schwarz preconditioner applied in
+# single precision, using dense local solver in a 16-bit precision.
+s5 = CG(AdditiveSchwarz(
     precision=torch.float32,
     coarse_solver=CUDSS(),
-    local_solver=Inv(precision=torch.bfloat16),
+    local_solver=Inv(precision=torch.float16),
 ))
 \end{lstlisting}
 \vspace{-3pt}
@@ -897,283 +903,6 @@ after a call to \verb|solve|. For such an occasion,
 the \verb|dd_solvers| package supplies utility functions that perform these permutations
 efficiently, given the three mappings: from fine elements to unknowns, from
 fine elements to solver subdomains, and from solver subdomains to coarse elements.
-
-\subsubsection{Construction of the Local Solvers' Matrices}
-\label{sec:local-solvers-assembly}
-
-The procedure for constructing the matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$ depends
-on the choice of the local solver, which might be either a \texttt{DenseBatchSolver}
-or a \texttt{SparseBatchSolver} (see Section~\ref{sec:solvers-overview}). In
-both cases, we develop tailored CUDA kernels. While expressing these constructions in
-PyTorch is possible, it requires creating intermediate indexing tensors, which substantially
-increase memory usage during setup and thus limit the maximum problem size that
-can be handled. Our kernels overcome these limitations.
-
-\paragraph{Dense case}
-
-By our requirements, all local matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$ have identical dimensions
-$k \times k$, where $k$ is the number of DoFs per local solver. Consequently, they can
-be stored in a single tensor of shape $(N_H, k, k)$, which is the format expected
-by \texttt{DenseBatchSolver} and enables efficient batched solutions.
-
-\begin{algorithm}
-  \caption{Construction of the local solvers' matrices -- dense case}
-  \label{alg:assemble-local-matrices-dense}
-  $row \gets thread\_global\_idx$\;
-  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return }
-  $solver \gets \lfloor row\ /\ k\rfloor $\;
-  $local\_row \gets row\!\!\mod k$\;
-  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
-    $col \gets A.col\_indices[i]$\;
-    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
-       $local\_col \gets col\!\!\mod k$\;
-       $local\_mat[solver][local\_row][local\_col] \gets A.values[i]$\;
-    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
-       \Return
-    }
-  }
-\end{algorithm}
-
-Assembly proceeds as follows.
-First, a tensor $local\_mat$ of shape $(N_H, k, k)$ is allocated on the GPU and filled with
-zeros. Then, the kernel sketched in Algorithm~\ref{alg:assemble-local-matrices-dense}
-iterates over the nonzero entries of the stiffness matrix $\bm{A}$, with each
-thread responsible for a single row. If the processed
-element has coordinates $(row, col)$ in~$\bm{A}$, it belongs
-to the local solver's matrix $\bm{A_{solver}}$ precisely when
-$solver = \lfloor row / k \rfloor = \lfloor col / k \rfloor$ (see \eqref{A_i_structure}).
-In turn, its local coordinates are $(row\!\!\mod k, col\!\!\mod k)$. It
-is assumed that the column indices in the CSR representation of $\bm{A}$
-are sorted within each row\footnote{This assumption is formally included in the
-CSR format definition. However, cuSPARSE allows a relaxed definition,
-which only requires that the column
-indices are unique within each row, not necessarily sorted \cite[Section~3.3.3]{cusparse}.}, and therefore the loop over the row's entries
-can be terminated as soon as $\lfloor col / k \rfloor > solver$.
-
-\paragraph{Sparse case}
-
-If the local matrices are large enough, it may pay off to turn to a sparse local
-solver, which is represented by the \texttt{SparseBatchSolver} class. In this case,
-the local matrices are stored in a~single \texttt{CSRBatch} object, a
-data structure defined in \texttt{dd\_solvers}.
-
-A \texttt{CSRBatch} stores a batch of CSR matrices $\bm{A_0}, ..., \bm{A_{N-1}}$
-as a tuple of five tensors:
-\begin{itemize}
-  \item \textit{nrows} -- a tensor of shape $(N,)$ containing the number of rows
-    in each matrix $\bm{A_i}$,
-  \item \textit{nnz} -- a tensor of shape $(N,)$ containing the number of nonzero
-    entries in each matrix~$\bm{A_i}$,
-  \item \textit{crow\_indices} -- a tensor of shape $(\sum_{i=0}^{N-1} (nrows[i] + 1),)$
-    containg the concatenated row-offset arrays of all matrices~$\bm{A_i}$,
-  \item \textit{col\_indices} -- a tensor of shape $(\sum_{i=0}^{N-1} nnz[i],)$
-    containing the concatenated column index arrays of all matrices~$\bm{A_i}$,
-  \item \textit{values} -- a tensor of shape $(\sum_{i=0}^{N-1} nnz[i],)$
-    containing the concatenated value arrays of all matrices~$\bm{A_i}$.
-\end{itemize}
-Here $N=N_H$ and the $nrows$ tensor is filled with~$k$. The remaining
-\texttt{CSRBatch} tensors are constructed in two stages.
-
-First, we compute the tensor $per\_row\_count$ of shape $(n,)$,
-where $per\_row\_count[r]$ is the number of nonzero entries in the $r$-th row of
-$\bm{A}$ that belong to the local solver's matrix $\bm{A_{\lfloor r/k \rfloor}}$.
-It is also the number of nonzero entries in the ${(r\!\!\mod k)}$\nobreakdash-th row
-of $\bm{A_{\lfloor r/k \rfloor}}$. The $per\_row\_count$ tensor is computed
-by the CUDA kernel which implements Algorithm~\ref{alg:assemble-local-matrices-sparse-i}.
-Iteration over the elements of $\bm{A}$ and mapping them to the local
-solvers' matrices is performed in the same way as in the dense case (cf.
-Algorithm~\ref{alg:assemble-local-matrices-dense}).
-
-\begin{algorithm}
-  \caption{Construction of the local solvers' matrices -- sparse case, stage 1}
-  \label{alg:assemble-local-matrices-sparse-i}
-  $row \gets thread\_global\_idx$\;
-  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return }
-  $solver \gets \lfloor row\ /\ k\rfloor $\;
-  $count \gets 0$\;
-  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
-    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
-        $count\!+\!+$
-    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
-        \Return
-    }
-  }
-  $per\_row\_count[row] \gets count$
-\end{algorithm}
-
-Once the $per\_row\_count$ array is available, the $nnz$ tensor is obtained
-by summing the entries of $per\_row\_count$ for each local solver. Since the
-number of DoFs per each local solver is $k$, it can be computed as
-\begin{verbatim}
-  nnz = per_row_count.reshape(-1, k).sum(dim=1).
-\end{verbatim}
-
-The same $per\_row\_count$ array is used to compute the $row\_of\!f\!set$ tensor,
-which is a~cumulative sum of the $per\_row\_count$ entries, i.e.
-\begin{equation}
-row\_of\!f\!set[0] = 0,\quad row\_of\!f\!set[i] = \textstyle\sum_{j=0}^{i-1} per\_row\_count[j]
-\quad \text{for }i=1,...,n.\label{eq:row-offset}
-\end{equation}
-In PyTorch, the parallel cumulative sum is efficiently implemented via
-the \verb|cumsum| function. Note that $row\_of\!f\!set[n]$ equals
-the total number of nonzero entries across all local solvers' matrices, which determines
-the lengths of the $col\_indices$ and $values$ tensors. We then
-allocate those tensors together with $crow\_indices$ of
-shape $(N_H \cdot (k + 1),)$.
-
-In the second stage, the CUDA kernel implementing Algorithm~\ref{alg:assemble-local-matrices-sparse-ii}
-fills $crow\_indices$, $col\_indices$, and $values$.
-Elements in the row $r$ of $\bm{A}$ that should be placed in one of the local solvers'
-matrices are identified in the same way as before. Their values and column indices
-are written in the corresponding tensors at positions
-$row\_of\!f\!set[r], ..., row\_of\!f\!set[{r + 1}] - 1$. Finally, the $crow\_indices$
-entries are computed from $row\_of\!f\!set$ via
-\[
-crow\_indices[s \cdot (k + 1) + l] = row\_of\!f\!set[s \cdot k + l] - row\_of\!f\!set[s \cdot k],
-\]
-for $s = 0, ..., N_H - 1$ and $l = 0, ..., k$.
-
-\begin{algorithm}
-  \caption{Construction of the local solvers' matrices -- sparse case, stage 2}
-  \label{alg:assemble-local-matrices-sparse-ii}
-  $row \gets thread\_global\_idx$\;
-  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return}
-  $solver \gets \lfloor row\ /\ k\rfloor $\;
-  $local\_row \gets row\!\!\mod k$\;
-  $out\_ind \gets row\_of\!f\!set[row]$\;
-  $first\_solver\_ind \gets row\_of\!f\!set[solver \cdot k]$\;
-  \uIf {$local\_row = 0$} {
-    $local\_crow\_indices[solver \cdot (k + 1)] \gets out\_ind - first\_solver\_ind$
-  }
-  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
-    $col \gets A.col\_indices[i]$\;
-    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
-      $local\_col \gets col\!\!\mod k$\;
-      $local\_values[out\_ind] \gets A.values[i]$\;
-      $local\_col\_indices[out\_ind] \gets local\_col$\;
-      $out\_ind\!+\!+$
-    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
-      \Break
-    }
-  }
-  $local\_crow\_indices[solver \cdot (k + 1) + local\_row + 1] \gets out\_ind - first\_solver\_ind$
-\end{algorithm}
-
-\subsubsection{Construction of the Coarse Solver's Matrix}
-\label{sec:coarse-solver-assembly}
-
-Construction of the coarse solver's matrix $\bm{A_C}$ (lines 5--7 of Algorithm
-\ref{preconditioner-setup-pseudocode}) first assembles the matrix in PyTorch's
-Coordinate (COO) format for sparse tensors \cite[Sparse COO tensors]{torch-sparse},
-and then converts it to CSR format expected by \verb|SparseSolver|.
-
-In COO format,
-a~sparse 2D matrix with $m$ nonzero entries is represented by two tensors:
-\begin{itemize}
-  \item $indices$ -- a tensor of shape $(2, m)$, where the first row contains
-    the row indices and the second row contains the column indices of the nonzero
-    entries;
-  \item $values$ -- a tensor of shape $(m,)$ containing the corresponding
-    values of the nonzero entries.
-\end{itemize}
-PyTorch permits \emph{uncoalesced} COO tensors, in which $indices$ may include
-duplicates; the value at a given coordinate is then the sum of all duplicated entries.
-Converting such tensor to CSR requires \emph{coalescing}, which groups duplicate
-indices and sums their values.
-
-Let $solvers\_to\_coarse$ be a tensor of shape $(N_H,)$ such that
-$solvers\_to\_coarse[j]=i$ whenever $\Omega_j \subseteq D_i$ for
-$j=0, ..., N_H - 1$. One can compute it via
-\begin{verbatim}
-  torch.arange(n_coarse).repeat_interleave(solvers_per_coarse),
-\end{verbatim}
-where $n\_coarse$ is equal to $N_{\mathcal{H}}$ and $solvers\_per\_coarse$
-is a tensor of shape $(N_H,)$ containing the values $l_0, ..., l_{N_H - 1}$ (see \eqref{l_i_def}).
-From \eqref{A_C_structure}, an entry $(r,c)$ of the stiffness matrix $\bm{A}$
-contributes to entry $(r',c')$ of $\bm{A_C}$, where
-\begin{equation}
-  r' = solvers\_to\_coarse[\lfloor r / k \rfloor],\quad
-  c' = solvers\_to\_coarse[\lfloor c / k \rfloor].\label{rcr'c'}
-\end{equation}
-Thus, one can assemble $\bm{A_C}$ by creating an uncoalesced COO tensor of all
-nonzeros of $\bm{A}$ with indices mapped according to the above, then coalescing
-and converting to CSR.
-However, the coalescing step involves sorting the $indices$ tensor, which
-requires significant amount of additional memory. To mitigate this, we use the fact that
-elements from each row of $\bm{A}$ that map to the same entry of $\bm{A_C}$
-are contiguous in the CSR representation. We therefore group them during COO assembly;
-only contributions from different rows must be merged in the final coalescing step,
-reducing the additional memory required.
-
-The intermediate COO tensor is constructed in two stages. First, the
-CUDA kernel which implements Algorithm~\ref{alg:assemble-coarse-matrix-i} computes the tensor
-$per\_row\_count$ of shape $(n,)$. Here $per\_row\_count[r]$ is the number of
-entries in the COO tensor resulting from the reduction of the $r$-th row of $\bm{A}$.
-The kernel runs on a 1D CUDA grid, where each thread handles one
-row of $\bm{A}$. The mapping defined by \eqref{rcr'c'} determines which entries are summed.
-
-\begin{algorithm}
-  \caption{Construction of the coarse solver's matrix -- stage 1}
-  \label{alg:assemble-coarse-matrix-i}
-  $row \gets thread\_global\_idx$\;
-  \lIf {$row \geq A.crow\_indices.size - 1$} { \Return }
-  $count \gets 0$\;
-  $prev\_block \gets -1$\;
-  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
-    $col \gets A.col\_indices[i]$\;
-    $col\_block \gets solvers\_to\_coarse[\lfloor col\ /\ k\rfloor]$\;
-    \uIf {$col\_block \neq prev\_block$} {
-      $count\!+\!+$\;
-      $prev\_block \gets col\_block$
-    }
-  }
-  $per\_row\_count[row] \gets count$
-\end{algorithm}
-
-Next, the tensor $row\_of\!f\!set$ is computed as in \eqref{eq:row-offset}. Its
-final entry, $row\_of\!f\!set[n]$, equals the total number of COO entries and
-thus defines the lengths of $out\_values$ and $out\_indices$ tensors. In the
-second stage, the CUDA kernel realizing Algorithm~\ref{alg:assemble-coarse-matrix-ii}
-fills these tensors. Entries of row $r$
-of $\bm{A}$ are grouped as before, their values are summed, and the result is
-written to $out\_indices$ and $out\_values$ at positions
-$row\_of\!f\!set[r], ..., row\_of\!f\!set[r+1]-1$.
-
-\begin{algorithm}
-  \caption{Construction of the coarse solver's matrix -- stage 2}
-  \label{alg:assemble-coarse-matrix-ii}
-  $row \gets thread\_global\_idx$\;
-  \lIf {$row \geq A.crow\_indices.size - 1$} { \Return }
-  $row\_block \gets solvers\_to\_coarse[\lfloor row\ /\ k\rfloor]$\;
-  $out\_ind \gets row\_of\!f\!set[row]$\;
-  $block\_sum \gets 0$\;
-  $prev\_block \gets -1$\;
-  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
-    $col \gets A.col\_indices[i]$\;
-    $col\_block \gets solvers\_to\_coarse[\lfloor col\ /\ k\rfloor]$\;
-    \uIf {$col\_block \neq prev\_block$} {
-      \uIf {$prev\_block \neq -1$} {
-          $out\_indices[0, out\_ind] \gets row\_block$\;
-          $out\_indices[1, out\_ind] \gets prev\_block$\;
-          $out\_values[out\_ind] \gets block\_sum$\;
-          $out\_ind\!+\!+$\;
-          $block\_sum \gets 0$
-      }
-      $prev\_block \gets col\_block$
-    }
-    $block\_sum\ +\!= A.values[i]$
-  }
-
-  \uIf {$prev\_block \neq -1$} {
-      $out\_indices[0, out\_ind] \gets row\_block$\;
-      $out\_indices[1, out\_ind] \gets prev\_block$\;
-      $out\_values[out\_ind] \gets block\_sum$
-  }
-\end{algorithm}
-
-Finally, the COO tensor formed by $out\_indices$ and
-$out\_values$ is coalesced and converted to the CSR format, yielding
-the CSR representation of the coarse solver's matrix $\bm{A_C}$.
 
 \subsubsection{Multiplication by a Vector}
 \label{sec:preconditioner-solve}
