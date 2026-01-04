@@ -483,10 +483,10 @@ and observe that
   \bm{u_C} + \bm{M_{hyb}^{loc}} \bm{A} \left(\bm{u^*} - \bm{u_C}\right).
 \]
 Therefore, we may equivalently solve
-\[
+\begin{equation}
   \bm{M_{hyb}^{loc}} \bm{A} \bm{v} =
-  \bm{M_{hyb}^{loc}} \bm{f},
-\]
+  \bm{M_{hyb}^{loc}} \bm{f}, \label{projected_system}
+\end{equation}
 for $\bm{v}\in \operatorname{range}(\bm{I} - \bm{R_C^T} \bm{A_C}^{-1} \bm{R_C} \bm{A})$
 and recover the solution of the original system as $\bm{u^*} = \bm{u_C} + \bm{v}$.
 
@@ -630,69 +630,93 @@ $\bm{M_{hyb}^{loc}}$, we need to compute the action of $\bm{A}$ immediately
 followed by the restriction $\bm{R_C}$. We can optimize this operation by
 precomputing the matrix $\bm{A_R} = \bm{R_C}\bm{A}$. From \eqref{R_C_structure}
 it follows that
-\[
+\begin{equation}
   \bm{A_R} = \left[d_{ij}\right]_{i=0,...,N_{\mathcal{H}}-1; j=0,...,n-1},
   \text{ where } d_{ij} = \sum_{s=k\bar l_{i}}^{k\bar l_{i+1}-1} a_{sj}.
-\]
+  \label{A_R_structure}
+\end{equation}
 
-We are now ready to present the algorithmic realization of the Schwarz preconditioners.
+We now present the algorithmic realization of the Schwarz preconditioners.
 The setup phase, common to both preconditioners, is outlined in
-Algorithm~\ref{preconditioner-setup-pseudocode}. Functions \textsc{M\_{add}}
-and \textsc{M\_{hyb}\_{loc}}, which multiply the respective preconditioning matrices
+Algorithm~\ref{preconditioner-setup-pseudocode}. The functions \textit{M\_{add}}
+and \textit{M\_{hyb}\_{loc}}, which multiply the respective preconditioning matrices
 by a vector, are defined in Algorithms~\ref{preconditioner-M-pseudocode}
 and \ref{preconditioner-M-hyb-pseudocode}, respectively.
-Since all algorithms operate solely on matrix representations of the operators,
-the boldface notation is omitted
-for notational clarity. Further implementation details are provided in the next section.
+Since these algorithms operate solely on matrix representations of the operators,
+the boldface notation is omitted for notational clarity.
+
+Notably, \textit{M\_{hyb}\_{loc}} assumes that the
+input vector belongs to the range of $\bm{I} - \bm{A}\bm{R_C^T} \bm{A_C}^{-1} \bm{R_C}$.
+As shown in \cite{toselli}, this condition is naturally satisfied
+when the function is used within the PCG method applied to the projected system
+\eqref{projected_system}.
+Since $\bm{I} - \bm{A}\bm{R_C^T} \bm{A_C}^{-1} \bm{R_C}$ is a~projection (which
+can be verified by direct calculation), it need not be explicitly applied at
+the beginning of \textit{M\_{hyb}\_{loc}}, saving computational time.
 
 \begin{algorithm}
   % When editing this algorithm, go through all references and check whether
   % the line numbers are correct.
-  \caption{ASM Preconditioner -- Setup}
+  \caption{Schwarz Preconditioners -- Setup}
   \label{preconditioner-setup-pseudocode}
   \KwIn{$A$, $k$, $l=(l_0, ..., l_{N_{\mathcal{H}}-1})$}
   \KwOut{$\bar l$, \textsc{CoarseSolve}, \textsc{LocalSolve}$[0\slice N_H-1]$}
-  \BlankLine
 
   $\bar l \gets \Call{CumulativeSums}{l}$  \Comment*[r]{\eqref{bar_l_i_def}}
   \ParFor(\Comment*[f]{$A_i\gets R_iAR_i^T$}){$i=0, ..., N_H-1$} {
     $A_i\gets A[ki \slice k(i + 1)-1][ki \slice k(i + 1)-1]$  \Comment*[r]{\eqref{A_i_structure}}
+    $\textsc{LocalSolve}[i] \gets \Call{InitLocalSolver}{A_i}$  \Comment*[r]{e.g. Cholesky factorization of $A_i$}
   }
   \ParFor(\Comment*[f]{$A_C\gets R_CAR_C^T$}){$i,j=0, ..., N_{\mathcal{H}}-1$} {
-    $(A_C)_{ij}\gets \Call{Sum}{A[k\bar l_{i} \slice k\bar l_{i + 1} - 1][k\bar l_{j} \slice k\bar l_{j + 1}-1]}$  \Comment*[r]{\eqref{A_C_structure}}
+    $A_C[i][j]\gets \Call{Sum}{A[k\bar l_{i} \slice k\bar l_{i + 1} - 1][k\bar l_{j} \slice k\bar l_{j + 1}-1]}$  \Comment*[r]{\eqref{A_C_structure}}
   }
   $\textsc{CoarseSolve} \gets \Call{InitCoarseSolver}{A_C}$  \Comment*[r]{e.g. sparse LU factorization of $A_C$}
-  \ParFor{$i=0, ..., N_{H}-1$} {
-    $\textsc{LocalSolve}[i] \gets \Call{InitLocalSolver}{A_i}$  \Comment*[r]{e.g. Cholesky factorization of $A_i$}
+  \ParFor(\Comment*[f]{$A_R\gets R_CA$ (only for $M_{hyb}^{loc}$)}){$i=0, ..., N_{\mathcal{H}}-1;\ j=0,...,n - 1$} {
+    $A_R[i][j] \gets \Call{Sum}{A[k\bar l_{i} \slice k\bar l_{i + 1} - 1][j]}$  \Comment*[r]{\eqref{A_R_structure}}
   }
 \end{algorithm}
 
 \begin{algorithm}
   % When editing this algorithm, go through all references and check whether
   % the line numbers are correct.
-  \caption{ASM Preconditioner -- Multiplication by a vector}
+  \caption{Additive Schwarz Preconditioner -- Multiplication By a Vector}
   \label{preconditioner-M-pseudocode}
   \KwReq{$k$, $l$, $\bar l$, \textsc{CoarseSolve}, \textsc{LocalSolve}$[0\slice N_H-1]$}
-  \Function(\Comment*[f]{computes $Mx$, where $M$ is as in \eqref{M_matrix}}){M($x$)} {
-    \ParFor(\Comment*[f]{$x^C\gets R_C x$}){$i=0, ..., N_{\mathcal{H}}-1$} {
-      $x^{C}_i\gets \Call{Sum}{x[k\bar l_{i} \slice k \bar l_{i + 1}-1]}$  \Comment*[r]{\eqref{R_C_effect}}
-    }
+
+  \Function(\Comment*[f]{computes $M_{add}x$}){M\_add($x$)} {
     \ParFor{$i=0, ..., N_H-1$} {
       $x^{(i)}\gets x[ki \slice k(i + 1)-1]$  \Comment*[r]{$x^{(i)}\gets R_ix$ \eqref{R_i_effect}}
-    }
-    $y^{C}\gets \Call{CoarseSolve}{x^{C}}$  \Comment*[r]{$y^{C}\gets A_C^{-1}x^{C}$}
-    \ParFor{$i=0, ..., N_H-1$} {
       $y^{(i)}\gets \textsc{LocalSolve}[i]\!\left(x^{(i)}\right)$  \Comment*[r]{$y^{(i)}\gets A_i^{-1}x^{(i)}$}
+      $y[ki \slice k(i + 1) - 1] \gets y^{(i)}$  \Comment*[r]{$y \gets R_0^Ty^{(0)}+ ...+R_{N_H-1}^Ty^{(N_H-1)}$ \eqref{R_i_T_effect}}
     }
-    \ParFor(\Comment*[f]{$y \gets R_0^Ty^{(0)}+ ...+R_{N_H-1}^Ty^{(N_H-1)}$}){$i=0, ..., N_H-1$} {
-      $y[ki \slice k(i + 1) - 1] \gets y^{(i)}$  \Comment*[r]{\eqref{R_i_T_effect}}
+    \ParFor(\Comment*[f]{$x^C\gets R_C x$}){$i=0, ..., N_{\mathcal{H}}-1$} {
+      $x^{C}[i]\gets \Call{Sum}{x[k\bar l_{i} \slice k \bar l_{i + 1}-1]}$  \Comment*[r]{\eqref{R_C_effect}}
     }
+    $y^{C}\gets \textsc{CoarseSolve}\!\left({x^{C}}\right)$  \Comment*[r]{$y^{C}\gets A_C^{-1}x^{C}$}
     $z\gets \Call{RepeatInterleave}{y^{C}, k\cdot l}$  \Comment*[r]{$z\gets R_C^T y^C$ \eqref{R_C_T_effect}}
     \Return $y + z$
   }
 \end{algorithm}
 
+\begin{algorithm}
+  % When editing this algorithm, go through all references and check whether
+  % the line numbers are correct.
+  \caption{Hybrid Schwarz Preconditioner -- Multiplication By a Vector}
+  \label{preconditioner-M-hyb-pseudocode}
+  \KwReq{$k$, $l$, $\bar l$, \textsc{CoarseSolve}, \textsc{LocalSolve}$[0\slice N_H-1]$, $A_R$}
 
+  \Function(\Comment*[f]{computes $M_{hyb}^{loc}x$, where $x \in \operatorname{range}(I - AR_C^TA_C^{-1}R_C)$}){M\_hyb\_loc($x$)} {
+    \ParFor{$i=0, ..., N_H-1$} {
+      $x^{(i)}\gets x[ki \slice k(i + 1)-1]$  \Comment*[r]{$x^{(i)}\gets R_ix$ \eqref{R_i_effect}}
+      $y^{(i)}\gets \textsc{LocalSolve}[i]\!\left(x^{(i)}\right)$  \Comment*[r]{$y^{(i)}\gets A_i^{-1}x^{(i)}$}
+      $y[ki \slice k(i + 1) - 1] \gets y^{(i)}$  \Comment*[r]{$y \gets R_0^Ty^{(0)}+ ...+R_{N_H-1}^Ty^{(N_H-1)}$ \eqref{R_i_T_effect}}
+    }
+    $z \gets \Call{MatVec}{A_R, y}$  \Comment*[r]{$z\gets R_CA y$}
+    $w \gets \textsc{CoarseSolve}\!\left(z\right)$  \Comment*[r]{$w\gets A_C^{-1}z$}
+    $t \gets \Call{RepeatInterleave}{w, k\cdot l}$  \Comment*[r]{$t\gets R_C^T w$ \eqref{R_C_T_effect}}
+    \Return $y - t$
+  }
+\end{algorithm}
 \section{Implementation}
 \label{chap:implementation}
 
