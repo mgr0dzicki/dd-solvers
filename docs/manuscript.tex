@@ -1,0 +1,2321 @@
+\documentclass[11pt]{article}
+
+\usepackage{mathtools}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{hyperref}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage[ruled,linesnumbered]{algorithm2e}
+\usepackage{svg}
+\usepackage{listings}
+\usepackage{multirow}
+\usepackage[table]{xcolor}
+\usepackage{siunitx}
+\usepackage{todonotes}
+
+\usepackage{geometry}
+\geometry{
+	a4paper,
+	margin=25mm
+}
+
+\lstdefinestyle{Python}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  commentstyle=\color{gray},
+  numbers=left,
+  numberstyle=\scriptsize\textbf,
+  numbersep=4pt,
+  xleftmargin=0pt,
+  mathescape
+}
+
+\graphicspath{{thesis-media}}
+
+\SetKwInput{KwReq}{Require}
+\SetKwComment{Comment}{$\triangleright$\ }{}
+\SetKwFor{ParFor}{parallel for}{do}{end parallel for}
+\SetKwProg{Function}{function}{}{end}
+\newcommand*{\Break}{\textbf{break}}
+\newcommand{\Call}[2]{\operatorname{#1}\!\left(#2\right)}
+\SetCommentSty{textrm}
+\DontPrintSemicolon
+
+\setcounter{MaxMatrixCols}{20}
+
+\newcommand*{\closure}[1]{
+	\ensuremath{\overline{\raisebox{0pt}[1.1\height]{$#1$}}}
+}
+\newcommand*{\slice}{\ensuremath{\, . \, . \,}}
+
+\graphicspath{{images}}
+
+\usepackage{xcolor}
+\hypersetup{
+	colorlinks,
+	linkcolor={red!50!black},
+	citecolor={blue!50!black},
+	urlcolor={blue!80!black},
+	linktocpage=true
+}
+
+\usepackage[sorting=nyt, style=ieee, backend=biber, doi=false, isbn=false,
+  eprint=false, url=false, citestyle=numeric-comp]{biblatex}
+\addbibresource{bibliography.bib}
+\appto\bibfont{\setlength{\emergencystretch}{.5em}}
+
+\title{A Nonoverlapping Additive Schwarz Method on a GPU}
+
+% Tu jest dobre miejsce na Twoje własne makra i~środowiska:
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\newtheorem*{remark*}{Remark}
+\theoremstyle{theorem}
+\newtheorem{theorem}{Theorem}
+\newtheorem{conjecture}{Conjecture}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem*{corollary*}{Corollary}
+
+% koniec definicji
+
+\begin{document}
+
+\maketitle
+
+% \tableofcontents
+%\listoffigures
+%\listoftables
+
+
+\section{Introduction}
+
+The objective of this thesis is to develop an efficient solver targeting
+Graphics Processing Units (GPUs) \cite{cuda-guide} for the linear systems
+arising from the discretization of elliptic problems of the form
+\begin{equation}
+  \begin{array}{rl}
+    -\operatorname{div}(\rho \nabla u)=f\quad & \text{in }\Omega,\\
+    u=0\quad & \text{on }\partial \Omega,
+  \end{array}
+  \label{div_eq}
+\end{equation}
+which occur, for example, in steady-state heat conduction~\cite{Ern-FEM}.
+Here $f$ is a prescribed source term, $\rho$ is a given medium property
+(e.g. conductivity) that may have jumps in heterogeneous media,
+and $u$ is the unknown (e.g. temperature).
+
+The number of unknowns in these systems can be extremely large, so exploiting the
+coefficient matrix's special properties is necessary.
+Specialized direct sparse solvers -- which perform a triangular
+decomposition -- cannot handle the largest systems. Therefore, iterative methods
+such as the Conjugate Gradient (CG), which compute only approximate solutions,
+must be used instead \cite{Saad}.
+Their convergence rate, in turn, depends on the system's condition number, which
+typically grows fast with the number of unknowns~\cite{Ern-FEM};
+effective preconditioners are therefore required to make an iterative method robust.
+While general-purpose preconditioners such as Jacobi, Gauss-Seidel,
+Incomplete LU or Incomplete Cholesky are available
+\cite{Saad, cusparse}, problem-specific approaches often deliver superior
+performance.
+
+A broad class of such tailored preconditioners comprises domain decomposition
+methods~\cite{toselli}, which partition the domain $\Omega$ into smaller subdomains,
+solve local problems independently and then combine the results. In this thesis we
+implement the three-grid, two-level Additive Schwarz Method (ASM) proposed and
+analyzed in \cite{Przykry, Przykry-hp}. Designed as a preconditioner for the Discontinuous Galerkin
+(DG) discretization of \eqref{div_eq} \cite{Ern-dg,Ern-weighted-dg}, it is robust
+with respect to discretization parameters even in the presence of jumps in~$\rho$.
+The DG discretization permits a~nonoverlapping ASM, which reduces coupling between
+local problems. This is particularly important for distributed-memory systems,
+since it minimizes inter-node communication, but is also beneficial
+for shared-memory architectures such as GPUs, as it reduces data dependencies
+and enables more parallelism.
+Moreover, the preconditioner
+construction allows a controlled balance between parallel scalability and
+preconditioner quality, including massively parallel variants potentially
+well-suited to GPUs~\cite{cuda-guide}.
+
+Domain decomposition methods have been successfully implemented on
+GPUs before. However, the amount of
+work in this area seems marginal given the growing importance of GPUs in
+scientific computing. Existing efforts typically handle
+tens~\cite{Yamazaki,Sistek} or at most thousands~\cite{Papadrakakis} of subdomains,
+primarily because each thread handles one subdomain at a~time.
+They consider hybrid CPU-GPU implementations~\cite{Yamazaki, Sistek, Papadrakakis},
+usually in a multi-node setting~\cite{Yamazaki,Sistek}, often porting
+existing CPU software to GPUs~\cite{Yamazaki}.
+
+Our approach differs in two key aspects. First, we target moderately sized problems
+that fit on a single GPU. We design our solver from the ground up for a GPU
+so that CPU does not participate in the solve phase and is used only for
+orchestration. Second, we implement the three-grid ASM~\cite{Przykry, Przykry-hp},
+which, to our knowledge, has not been ported to a GPU before. This allows
+us to consider highly parallel variants with millions of small subdomains,
+processing all of them simultaneously within a single GPU kernel; this design seems
+better suited to the GPU architecture \cite{cuda-guide}.
+
+We assume that the linear system $\bm{A} \bm{u^*} = \bm{f}$, resulting from the
+DG discretization of~\eqref{div_eq}, has already been assembled and is provided.
+Our first goal is to implement an efficient single\nobreakdash-GPU solver for this system,
+employing the preconditioned CG method accelerated by the ASM preconditioner.
+Our second goal is to evaluate its performance across a range of parameters
+to identify the best-performing configurations and to compare it with the
+standard two-grid variant~\cite{classical-estimate}.
+Finally, we will compare the preconditioner and its implementation
+against NVIDIA's state-of-the-art GPU preconditioner -- AmgX \cite{amgx}.
+
+The thesis is organized as follows. Chapter~\ref{chap:theory} presents
+the mathematical foundations, defines the ASM preconditioner
+and derives its algorithmic realization. Chapter~\ref{chap:implementation}
+details the implementation of the preconditioner and other solver components,
+including the CG method. Finally, Chapter~\ref{chap:experiments} reports
+experimental results across a range of parameter settings, identifies
+the best-performing configurations and compares them with the
+NVIDIA AmgX library.
+
+\section{Numerical Framework}
+\label{chap:theory}
+
+\todo{nieaktualne} The objective of this chapter is to present the mathematical foundations required for
+understanding and, henceforth, implementing an Additive Schwarz Method (ASM) solver for \eqref{div_eq}.
+Section~\ref{sec:variational-formulation} introduces the variational formulation
+of \eqref{div_eq}, which serves as the basis for the
+Discontinuous Galerkin (DG) discretization described in Section~\ref{sec:discretization}.
+In Section~\ref{sec:additive-schwarz-method}, we define
+the ASM preconditioner for the obtained discrete system and examine its key properties. Finally,
+Section~\ref{sec:preconditioner-alg} derives the detailed algorithmic procedure
+for applying the ASM preconditioner, which provides the foundation for the
+GPU\nobreakdash-accelerated implementation presented in Chapter~\ref{chap:implementation}.
+
+\subsection{Variational Formulation of the Problem}
+\label{sec:variational-formulation}
+
+Let $\Omega \subset \mathbb{R}^d$, where $d\in \{2, 3\}$, be an open, bounded
+polyhedral domain with Lipschitz boundary $\partial \Omega$. We denote by
+$(\cdot, \cdot)_{L^2(\Omega)}$ the inner product on $L^2(\Omega)$ and by
+$\| \cdot \|_{L^2(\Omega)}$ the corresponding norm:
+\[
+  (u, v)_{L^2(\Omega)} = \int_\Omega u(x) v(x)\, dx,\quad
+  \| u \|_{L^2(\Omega)} = (u, u)_{L^2(\Omega)}^{1/2},\quad
+  \forall u, v\in L^2(\Omega).
+\]
+Similarly, we denote the norm and semi-norm on the Sobolev space $H^k(\Omega)$
+by $\|\cdot\|_{H^k(\Omega)}$ and $|\cdot|_{H^k(\Omega)}$, respectively,
+defined by
+\begin{equation*}
+  \|u\|_{H^k(\Omega)} = \left(\sum_{|\alpha| \leq k} \|D^\alpha u\|_{L^2(\Omega)}^2\right)^{1/2},\quad
+  |u|_{H^k(\Omega)} = \left(\sum_{|\alpha| = k} \|D^\alpha u\|_{L^2(\Omega)}^2 \right)^{1/2}.
+\end{equation*}
+
+We assume that
+${f\in L^2(\Omega)}$, ${\rho\in L^\infty(\Omega)}$ are prescribed, and that there
+exist positive constants $c_0, c_1$ such that $c_0 \leq \rho \leq c_1$ almost everywhere
+in $\Omega$. Let the bilinear form
+${a: H^1(\Omega)\times H^1(\Omega) \to \mathbb{R}}$ be given by
+\[
+  a(u, v) = \int_\Omega \rho(x) \nabla u(x) \cdot \nabla v(x)\, dx.
+\]
+The \emph{variational formulation} of \eqref{div_eq} is then:
+Find $u^* \in H_0^1(\Omega)$ such that
+\begin{equation}
+  a(u^*, v) = (f, v)_{L^2(\Omega)} \quad \forall v \in H_0^1(\Omega).\label{var-cont-formulation}
+\end{equation}
+Owing to the boundedness of $\rho$, the bilinear form $a$ is continuous and coercive
+on $H_0^1(\Omega)$, which guarantees existence and uniqueness of the solution
+by the Lax-Milgram lemma \cite{Brenner}.
+
+\subsection{Discontinuous Galerkin Discretization of the Problem}
+\label{sec:discretization}
+
+Let $\{\mathcal{T}_h\}_{h>0}$ be a shape-regular family of affine
+triangulations of $\Omega$ (cf. \cite[Definitions 1.53, 1.107]{Ern-FEM}), and denote by
+$h=\max_{K\in \mathcal{T}_h} \operatorname{diam}(K)$ a parameter describing the mesh size.
+We fix one triangulation $\mathcal{T}_h$ (the \emph{fine mesh}) and
+denote by $\mathcal{E}_h$ the set of all its faces (edges in 2D).
+For a~given integer $p\geq 1$, we will approximate the solution of \eqref{var-cont-formulation}
+in the \emph{broken finite element space}
+\[
+  V_h = \{v \in L^2(\Omega) : v|_K \in \mathcal{P}_p \text{ for all } K\in \mathcal{T}_h\},
+\]
+where $\mathcal{P}_p$ is the space of real polynomials of degree at most $p$.
+For $u, v\in V_h$, $K\in \mathcal{T}_h$, $e\in \mathcal{E}_h$ we use
+the standard notation
+\[
+  (u, v)_K = \int_K u(x) v(x)\, dx,\quad \langle u, v \rangle_e = \int_e u(x) v(x)\, d\sigma_e(x),
+\]
+where $\sigma_e$ is the surface measure on $e$. Discretization of
+\eqref{var-cont-formulation} by the symmetric weighted interior penalty
+Discontinuous Galerkin (DG) method leads to the following problem \cite{Przykry, Ern-weighted-dg}:
+Find $u_h^* \in V_h$ such that
+\begin{equation}
+  \mathcal{A}_h(u_h^*, v_h) = (f, v_h)_{L^2(\Omega)} \quad \forall v_h \in V_h,\label{var-formulation}
+\end{equation}
+where $\mathcal{A}_h: V_h \times V_h \to \mathbb{R}$ is a bilinear form on $V_h$ defined as
+\begin{equation}
+\mathcal{A}_h(u, v) = \sum_{K\in \mathcal{T}_h} \left(\rho \nabla u, \nabla v\right)_K
+  + \sum_{e\in \mathcal{E}_h} \langle \gamma [u], [v]\rangle_e
+  - \sum_{e\in \mathcal{E}_h} \langle [u], \{\rho \nabla v\}_\omega\rangle_e
+  - \sum_{e\in \mathcal{E}_h} \langle \{\rho \nabla u\}_\omega, [v] \rangle_e.
+  \label{A_h_def}
+\end{equation}
+For an interior face $e=\partial K_1 \cap \partial K_2$, $K_1, K_2 \in \mathcal{T}_h$, we set
+\[
+  \gamma = \frac{\delta p^2}{h_e}\frac{\rho_1 \rho_2}{\rho_1 + \rho_2},\quad
+  \omega_1 = \frac{\rho_2}{\rho_1 + \rho_2},\quad
+  \omega_2 = \frac{\rho_1}{\rho_1 + \rho_2},
+\]
+where $\rho_i=\rho|_{K_i}$, $h_e=\operatorname{diam}(e)$ and $\delta>0$ is a prescribed constant.
+The \emph{weighted average} and \emph{jump} operators are then
+\[
+  \{\rho \nabla u\}_{\omega} = \omega_1 \rho_1 \nabla u_1 + \omega_2 \rho_2 \nabla u_2,\quad
+  [u] = u_1 n_1 + u_2 n_2,
+\]
+with $u_i=u|_{K_i}$, and $n_i$ being the outward normal
+vector to $K_i$ on $e$ for $i=1,2$. On a boundary face $e\subseteq \partial K_1\cap \partial \Omega$,
+we take
+\[
+  \gamma = \frac{\delta p^2}{h_e}\rho_1,\quad
+  \{\rho \nabla u\}_\omega = \rho_1 \nabla u_1,\quad
+  [u] = u_1 n_1.
+\]
+Values of $\{\rho \nabla v\}$ and $[v]$ are defined analogously.
+
+Let us fix a basis $\Phi=(\varphi_0, ..., \varphi_{n-1})$ of the finite element space $V_h$.
+Elements of the \emph{stiffness matrix} ${\bm{A}=\left[a_{ij}\right]}$ are defined
+as $a_{ij} = \mathcal{A}_h(\varphi_i, \varphi_j)$ for $i,j=0,...,n-1$. Equivalently,
+$\bm{A}$ is the matrix representation of the bilinear form $\mathcal{A}_h$
+with respect to the basis $\Phi$.
+Similarly, let us define elements of the \emph{load vector} $\bm{f}=(f_0, ..., f_{n - 1})$
+as $f_i = (f, \varphi_i)_{L^2(\Omega)}$. The variational problem
+\eqref{var-formulation} is then equivalent to the linear system
+\begin{equation}
+  \bm{A} \bm{u^*} = \bm{f},\label{auf}
+\end{equation}
+where $\bm{u^*}=(u_0, ..., u_{n - 1})\in\mathbb{R}^n$ are the coefficients
+of $u_h^*$ in the basis $\Phi$, i.e. $u_h^*=\sum_{i=0}^{n-1} u_i \varphi_i$.
+In order for both \eqref{var-formulation} and \eqref{auf} to
+be well-posed, the matrix $\bm{A}$ must
+be invertible, which is guaranteed by the following result.
+
+\begin{theorem}[\cite{Ern-weighted-dg}]\label{thm:spd}
+  There exists $\delta_0>0$ such that for all $h>0$, $p\geq 1$ and $\delta \geq \delta_0$,
+  the bilinear form~$\mathcal{A}_h$ (and hence its corresponding matrix $\bm{A}$)
+  is symmetric and positive definite.
+\end{theorem}
+
+From this point onward, we shall assume that $\delta \geq \delta_0$, and consequently,
+the conclusions of the above theorem hold. Under this assumption, the
+following approximation result applies.
+
+\begin{theorem}[\cite{Ern-weighted-dg}]
+  If the exact solution $u^*\in H_0^1(\Omega)$ of
+  \eqref{var-cont-formulation} belongs to the broken Sobolev space
+  \[
+    H^{p+1}(\mathcal{T}_h)=\{v \in L^2(\Omega) : v|_K \in H^{p+1}(K) \text{ for all } K\in \mathcal{T}_h\},
+  \]
+  then there exists a constant $C>0$ independent of $h$ such that
+  \[
+    \|u_h^* - u^*\|_{L^2(\Omega)} \leq C h^{p+1} \|u^*\|_{H^{p+1}(\mathcal{T}_h)}.
+  \]
+\end{theorem}
+
+\subsection{Schwarz Preconditioners for the Discrete System}
+\label{sec:additive-schwarz-method}
+
+We aim to solve the linear system \eqref{auf} using the Preconditioned
+Conjugate Gradient (PCG) method \cite[Section 9.2]{Saad}, which requires an
+effective preconditioner for the matrix $\bm{A}$. To this end, we employ
+the three-grid nonoverlapping Schwarz Method from~\cite{Przykry},
+which is tailored specifically for the system~\eqref{auf}.
+We now outline this construction.
+
+For this purpose we introduce two additional
+partitions of~$\Omega$: \emph{local solvers' mesh} $\mathcal{T}_H=\{\Omega_0, ..., \Omega_{N_H-1}\}$ and
+\emph{coarse mesh} $\mathcal{T}_{\mathcal{H}}=\{D_0, ..., D_{N_{\mathcal{H}-1}}\}$.
+We assume the inclusion
+\[
+  \mathcal{T}_{\mathcal{H}}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h,
+\]
+in the sense that $\mathcal{T}_H$ is a refinement of $\mathcal{T}_{\mathcal{H}}$ and
+$\mathcal{T}_h$ is a refinement of $\mathcal{T}_H$ (see Figure~\ref{fig:mesh_examples}
+for examples). Finally, set
+$H=\max_{j} \operatorname{diam}(\Omega_j)$ and $\mathcal{H}=\max_{j} \operatorname{diam}(D_j)$.
+
+Following \cite{Przykry}, we decompose the finite element space $V_h$, hereafter
+denoted simply by $V$, into the sum
+\begin{equation}
+  V = V_C + \sum_{i=0}^{N_H-1} V_i,\label{V_decomp}
+\end{equation}
+where the \emph{coarse space} is
+\[
+  V_C = \{v \in V : v|_{D_j}\in \mathcal{P}_0\text{ for } j=0,...,N_{\mathcal{H}}-1\}
+\]
+and the \emph{local spaces} are
+\[
+  V_i = \{v\in V : v|_{\Omega_j}=0 \text{ for all } j\neq i\},\quad i=0,...,N_H-1.
+\]
+Note that $V$ is a direct sum of the local spaces $V_0, ..., V_{N_H-1}$.
+
+We define the \emph{coarse solve operator}
+$T_C: V\to V_C$ by the relation
+\begin{equation}
+  \mathcal{A}_h(T_C u, v_C) = \mathcal{A}_h(u, v_C) \quad \forall v_C\in V_C,\label{T_C_def}
+\end{equation}
+and analogously the \emph{local solve operators} $T_i: V\to V_i$ by
+\begin{equation}
+  \mathcal{A}_h(T_i u, v_i) = \mathcal{A}_h(u, v_i) \quad \forall v_i\in V_i\label{T_i_def}
+\end{equation}
+for $i=0,...,N_H-1$. The preconditioned additive Schwarz operator $T_{add}:V\to V$
+corresponding to \eqref{V_decomp} is then defined as
+\begin{equation}
+  T_{add} = T_C + \sum_{i=0}^{N_H-1} T_i.\label{T_def}
+\end{equation}
+In addition, we consider
+the preconditioned hybrid Schwarz operator $T_{hyb}:V\to V$, defined as
+\begin{equation}
+  T_{hyb} = T_C + \left(I - T_C\right) \sum_{i=0}^{N_H-1} T_i(I-T_C).\label{T_hyb_def}
+\end{equation}
+
+To utilize the PCG method, the operators $T_{add}$ and $T_{hyb}$ must be
+symmetric and positive definite (SPD) with respect to the inner product induced
+by $\mathcal{A}_h$. Sufficient conditions for $T_{add}$ to satisfy these properties,
+along with estimates of its condition number, are established in \cite{Przykry}
+and \cite{Przykry-hp}. These results can be extended to $T_{hyb}$ using tools
+from \cite{toselli}. Since the implementation is independent of the specific
+details, we omit them and proceed under the assumption that $\rho$, $\mathcal{T}_h$,
+$\mathcal{T}_H$ and $\mathcal{T}_{\mathcal{H}}$ are chosen such that
+both $T_{add}$ and $T_{hyb}$ are SPD.
+
+We now derive a formula for the preconditioning matrices $\bm{M_{add}}$ and
+$\bm{M_{hyb}}$, which follow from the definition of the preconditioned operators
+$T_{add}$ and $T_{hyb}$, respectively.
+Assume that $\Phi_C$ is a basis of $V_C$ and that $\Phi_i$ is a~basis of $V_i$ for
+$i=0,...,N_H-1$. Whenever we introduce matrices of
+linear operators defined on the spaces $V$, $V_C$ and $V_i$ for $i=0,...,N_H-1$, we will
+always assume they are represented with respect to $\Phi$, $\Phi_C$ and $\Phi_i$,
+respectively, for $i=0,...,N_H-1$. The specific bases $\Phi$, $\Phi_C$ and $\Phi_i$ will later
+be chosen to facilitate an efficient implementation of the preconditioner.
+
+Let $\bm{T_C}$, $\bm{T_i}$, $\bm{T_{add}}$ and $\bm{T_{hyb}}$ be the matrices of the
+operators $T_C$, $T_i$, $T_{add}$ and $T_{hyb}$, respectively, for ${i=0,...,{N_H-1}}$.
+Let $\bm{R_C}^T$ denote the matrix of the identity embedding $R_C^T: V_C \to V$
+and let $\bm{R_C}$ be its transpose. Matrices
+$\bm{R_i}^T$ and $\bm{R_i}$ are defined analogously for the local spaces $V_i$,
+$i=0,...,N_H-1$. From \eqref{T_C_def} we obtain
+\[
+\left(\bm{R_C}^T\bm{v_C}\right)^T \bm{A} \left(\bm{R_C}^T\bm{T_C}\bm{u}\right)
+  = \left(\bm{R_C}^T\bm{v_C}\right)^T \bm{A} \bm{u}
+\quad \forall \bm{u}\in \mathbb{R}^n\ \forall \bm{v_C}\in \mathbb{R}^{\dim V_C},
+\]
+which simplifies to
+\begin{equation}
+\bm{R_C} \bm{A} \bm{R_C}^T \bm{T_C} = \bm{R_C} \bm{A},\quad i=0,...,N_H.\label{T_C_eq}
+\end{equation}
+Since $\bm{A}$ is SPD, and matrices $\bm{R_C}$ and $\bm{R_C}^T$ have full rank
+(as $R_C^T:V_C\to V$ is an embedding), the matrix
+\begin{equation}
+\bm{A_C} = \bm{R_C} \bm{A} \bm{R_C}^T\label{A_C_def}
+\end{equation}
+is also SPD. In particular, it is invertible, and
+\eqref{T_C_eq} can be rewritten as
+\begin{equation}
+\bm{T_C} = \bm{A_C}^{-1}\bm{R_C}\bm{A}.\label{T_C_matrix}
+\end{equation}
+Analogously, from \eqref{T_i_def} we obtain
+\begin{equation}
+\bm{T_i} = \bm{A_i}^{-1}\bm{R_i}\bm{A},\quad i=0,...,N_H-1,\label{T_i_matrix}
+\end{equation}
+where
+\begin{equation}
+\bm{A_i} = \bm{R_i} \bm{A} \bm{R_i}^T,\quad i = 0, ..., N_H - 1.\label{A_i_def}
+\end{equation}
+The matrix $\bm{A_C}$ will be referred to as the \emph{coarse solver matrix},
+while $\bm{A_0}, ..., \bm{A_{N_H-1}}$ will be called the \emph{local solvers' matrices}.
+
+Now, from \eqref{T_def}, we obtain
+\[
+\bm{T_{add}} = \bm{R_C}^T \bm{T_C} + \sum_{i=0}^{N_H-1}\bm{R_i}^T\bm{T_i} =
+  \bm{R_C}^T\bm{A_C}^{-1}\bm{R_C}\bm{A}
+  + \sum_{i=0}^{N_H-1} \bm{R_i}^T\bm{A_i}^{-1}\bm{R_i}\bm{A}=:\bm{M_{add}}\bm{A},
+\]
+where
+\begin{equation}
+  \bm{M_{add}} = \bm{R_C}^T \bm{A_C}^{-1} \bm{R_C} + \sum_{i=0}^{N_H-1} \bm{R_i}^T \bm{A_i}^{-1} \bm{R_i},\label{M_matrix}
+\end{equation}
+is the additive Schwarz preconditioner for the system \eqref{auf}. Similarly,
+by combining \eqref{T_hyb_def}, \eqref{T_C_matrix} and \eqref{T_i_matrix}, we obtain
+\begin{multline*}
+  \bm{T_{hyb}}= \bm{R_C}^T \bm{T_C} + \left(\bm{I} - \bm{R_C}^T \bm{T_C}\right)
+  \sum_{i=0}^{N_H-1} \bm{R_i}^T \bm{T_i} \left(\bm{I} - \bm{R_C}^T \bm{T_C}\right)=\\
+  = \bm{R_C}^T \bm{A_C}^{-1} \bm{R_C} \bm{A} +
+  \left(\bm{I} - \bm{R_C}^T \bm{A_C}^{-1} \bm{R_C} \bm{A}\right)
+  \sum_{i=0}^{N_H-1} \bm{R_i}^T \bm{A_i}^{-1} \bm{R_i}
+  \left(\bm{I} - \bm{A}\bm{R_C}^T \bm{A_C}^{-1} \bm{R_C}\right)\bm{A}=: \bm{M_{hyb}}\bm{A}.\\
+\end{multline*}
+Here we set
+\[
+  \bm{M_{hyb}} = \bm{R_C}^T \bm{A_C}^{-1} \bm{R_C} + \bm{M_{hyb}^{loc}},
+\]
+where
+\begin{equation}
+  \bm{M_{hyb}^{loc}} =
+  \left(\bm{I} - \bm{R_C}^T \bm{A_C}^{-1} \bm{R_C} \bm{A}\right)
+  \sum_{i=0}^{N_H-1} \bm{R_i}^T \bm{A_i}^{-1} \bm{R_i}
+  \left(\bm{I} - \bm{A}\bm{R_C}^T \bm{A_C}^{-1} \bm{R_C}\right).
+  \label{M_hyb_loc}
+\end{equation}
+In contrast to the additive case, we do not solve the preconditioned system
+\[
+  \bm{M_{hyb}} \bm{A} \bm{u^*} = \bm{M_{hyb}} \bm{f}
+\]
+directly using PCG. Instead, we employ the \emph{projected conjugate gradient} algorithm
+\cite{toselli}. To this end, we set
+\[
+  \bm{u_C} = \bm{R_C^T}\bm{A_C}^{-1}\bm{R_C}\bm{A} \bm{u^*}= \bm{R_C^T} \bm{A_C}^{-1} \bm{R_C} \bm{f}
+\]
+and observe that
+\[
+  \bm{M_{hyb}} \bm{A} \bm{u^*} = \bm{u_C} + \bm{M_{hyb}^{loc}} \bm{A} \bm{u^*}=
+  \bm{u_C} + \bm{M_{hyb}^{loc}} \bm{A} \left(\bm{u^*} - \bm{u_C}\right).
+\]
+Therefore, we may equivalently solve
+\[
+  \bm{M_{hyb}^{loc}} \bm{A} \bm{v} =
+  \bm{M_{hyb}^{loc}} \bm{f},
+\]
+for $\bm{v}\in \operatorname{range}(\bm{I} - \bm{R_C^T} \bm{A_C}^{-1} \bm{R_C} \bm{A})$
+and recover the solution of the original system as $\bm{u^*} = \bm{u_C} + \bm{v}$.
+
+\subsection{Algorithmic Realization of the Schwarz Preconditioners}
+\label{sec:preconditioner-alg}
+
+The PCG method uses the preconditioning matrices $\bm{M_{add}}$ and $\bm{M_{hyb}^{loc}}$
+defined in \eqref{M_matrix} and \eqref{M_hyb_loc}, respectively,
+only to compute their product with the residual vector at each iteration.
+Therefore we do not need to assemble $\bm{M_{add}}$ or $\bm{M_{hyb}^{loc}}$
+explicitly, but just to efficiently evaluate the matrix\nobreakdash-vector product.
+In this section we present parallel algorithms for that purpose.
+
+Here and in following implementation, we assume that the number of degrees of freedom
+(DoFs) in each local space $V_i$ is the same; that is $\dim V_i = k$ for
+all $i=0,...,N_H-1$ and some fixed integer $k$.
+For example, this condition holds
+when $\mathcal{T}_h$ is a uniform refinement of $\mathcal{T}_H$,
+which includes the massively parallel variant where each local problem is posed on
+a~single element. Under this assumption, all local solvers' matrices
+$\bm{A_i}$ have identical dimensions $k\times k$, which is crucial for the
+efficient GPU parallelization (see Section~\ref{chap:implementation}). We do not,
+however, require the matrices $\bm{A_i}$ to be identical, preserving flexibility
+in the mesh design and allowing for variable coefficient $\rho$.
+
+Let $l_i$ be the number of local solvers' subdomains $\Omega_j$ that
+are contained in the element $D_i$ of the coarse mesh $\mathcal{T}_{\mathcal{H}}$, i.e.
+\begin{equation}
+  l_i = \left|\{j : \Omega_j \subseteq D_i\}\right|,\quad i=0,...,N_{\mathcal{H}-1}.\label{l_i_def}
+\end{equation}
+Note that we allow different values of $l_i$ for different $i$. To shorten the notation,
+let us set
+\begin{equation}
+  \bar l_0 = 0;\quad \bar l_i = l_1 + ... + l_{i-1},\quad i=1,...,N_{\mathcal{H}}.\label{bar_l_i_def}
+\end{equation}
+Observe that $\bar l_{N_{\mathcal{H}}} = N_H$.
+
+Now, as the basis $\Phi=(\varphi_0, ..., \varphi_{n-1})$ of $V$ let us choose the
+standard finite element nodal basis (see, e.g., \cite{Brenner}). This choice
+ensures that the stiffness matrix $\bm{A}$ is sparse.
+After an appropriate permutation of the indices, we may additionally assume that
+\begin{align*}
+\operatorname{supp} \varphi_j \subseteq \closure{\Omega_i} &\iff ki \leq j <  k(i + 1),\\
+\Omega_j \subseteq D_i &\iff \bar l_{i} \leq j < \bar l_{i + 1},
+\end{align*}
+which implies
+\begin{equation}
+\operatorname{supp} \varphi_j \subseteq \closure{D_i}\iff k\bar l_{i} \leq j < k \bar l_{i + 1}.\label{l_i_res}
+\end{equation}
+Then we may choose
+\[
+\Phi_i = \left(\varphi_{j} : ki \leq j <  k(i + 1)\right)
+\]
+as the basis of $V_i$ for $i=0,...,N_H-1$ and
+\[
+\Phi_C = \left(\varphi_{k\bar l_{i}} + ... + \varphi_{k \bar l_{i + 1}-1} :
+  i=0,...,N_{\mathcal{H}}-1\right)
+\]
+as the basis of $V_C$. As a result, for $i=0,...,N_H-1$, the matrix
+$\bm{R_i}$ has the following, very simple block structure
+\newcommand\undermat[2]{%
+  \makebox[0pt][l]{%
+    $\smash{\kern-0.85\arraycolsep
+      \underbrace{\phantom{\kern\arraycolsep\begin{matrix}#2\end{matrix}\kern0.85\arraycolsep}}_{\text{$#1$}}}$}#2}
+\begin{equation}
+\arraycolsep=8pt\def\arraystretch{1.5}
+  \bm{R_i}=\left[\begin{array}{c|c|c|c|c|c|c|c|c}
+      \undermat{i\text{ blocks}}{\bm{0_k} & \bm{0_k} & \dots & \bm{0_k}} &
+      \bm{I_k} &
+      \undermat{(N_H - i - 1)\text{ blocks}}{\bm{0_k} & \bm{0_k} & \dots & \bm{0_k}}\\
+  \end{array}\right]\vspace{20pt}
+  \label{Ri_structure}
+\end{equation}
+where $\bm{I_k}$ denotes the $k\times k$ identity matrix and $\bm{0_k}$
+the zero matrix of the same size. Therefore
+\begin{equation}
+  \bm{R_i}^T(u_{ki}, ..., u_{k(i + 1) - 1})=
+    (\underbrace{0, 0, ..., 0}_{ki}, u_{ki}, ..., u_{k(i + 1) - 1},
+    \underbrace{0, 0, ..., 0}_{k(N_H - i - 1)}),\quad i=0,...,N_H-1\label{R_i_T_effect}
+\end{equation}
+and
+\begin{equation}
+  \bm{R_i}(u_0, ..., u_{n-1}) = (u_{ki}, ..., u_{k(i + 1) - 1}),\quad i=0,...,N_H-1.\label{R_i_effect}
+\end{equation}
+For the coarse space we have
+\begin{equation}
+  \bm{R_C}=\begin{bmatrix}
+    \multicolumn{4}{c}{\smash[b]{\underbrace{\begin{matrix}1 & 1 & \cdots & 1\end{matrix}}_{kl_0}}} &   &   &  &   &  &   &   & &  \\
+      &   &  &   & \multicolumn{4}{c}{\smash[b]{\underbrace{\begin{matrix}1 & 1 & \cdots & 1\end{matrix}}_{kl_1}}} &  &   &   &  &  \\
+      &  &  &  &  &  &  &  & \ddots &  &  &  & \\
+      &  &  &  &  &  &  &  &  & \multicolumn{4}{c}{\smash[b]{\underbrace{\begin{matrix}1 & 1 & \cdots & 1\end{matrix}}_{kl_{N_\mathcal{H}-1}}}}
+  \end{bmatrix}\vspace{1 pt}\label{R_C_structure},
+\end{equation}
+hence
+\begin{equation}
+  \bm{R_C}^T(v_0, v_1, ..., v_{N_{\mathcal{H}}-1}) =
+    (\underbrace{v_0, v_0, ..., v_0}_{kl_0},
+    \underbrace{v_1, v_1, ..., v_1}_{kl_1}, ...,
+    \underbrace{v_{N_{\mathcal{H}}-1}, v_{N_{\mathcal{H}}-1}, ..., v_{N_{\mathcal{H}}-1}}_{kl_{N_\mathcal{H}-1}}),\label{R_C_T_effect}
+\end{equation}
+and
+\begin{equation}
+  \bm{R_C}(u_0, ..., u_{n-1}) = (c_0, ..., c_{N_{\mathcal{H}}-1}),\quad \text{where } c_i = u_{k\bar l_i} + ... + u_{k\bar l_{i + 1} - 1}.
+  \label{R_C_effect}
+\end{equation}
+
+From \eqref{A_i_def} and \eqref{Ri_structure} we see that if
+$\bm{A}=\left[a_{rs}\right]_{r,s=0,...,{n-1}}$, then
+\begin{equation}
+  \bm{A_i} = \left[a_{rs}\right]_{r,s=ki, ..., k(i + 1) - 1},\quad i=0,...,N_H-1,\label{A_i_structure}
+\end{equation}
+i.e. $\bm{A_i}$ is a submatrix of $\bm{A}$ containing only the rows and columns
+indexed by $ki, ..., k(i + 1)-1$. On the other hand,
+from \eqref{A_C_def} and \eqref{R_C_structure} we obtain
+\begin{equation}
+  \bm{A_C}=\left[c_{ij}\right]_{i,j=0,...,N_{\mathcal{H}}-1},
+  \text{ where } c_{ij} = \sum_{r=k\bar l_{i}}^{k \bar l_{i+1}-1}
+  \ \sum_{s=k\bar l_{j}}^{k\bar l_{j+1}-1} a_{rs}.\label{A_C_structure}
+\end{equation}
+
+For the sake of completeness, we note that there is an alternative way to
+construct the matrix~$\bm{A_C}$. From \eqref{A_C_def} we know that $\bm{A_C}$
+represents the restriction of $\mathcal{A}_h$ to the coarse
+space~$V_C$. Moreover, for $u_C, v_C\in V_C$ one has
+$\nabla u_C \equiv \nabla v_C\equiv0$ almost everywhere in each $D_j$ for
+$j=0,...,N_{\mathcal{H}}-1$, and hence \eqref{A_h_def} reduces to
+\[
+\mathcal{A}_h(u_C, v_C)= \sum_{e\in \mathcal{E}_h} \langle \gamma [u_C], [v_C]\rangle_e,
+\quad \forall u_C, v_C\in V_C.
+\]
+Therefore, $\bm{A_C}$ can be efficiently assembled directly from the
+right-hand side of the formula above, provided the
+basis of $V_C$ is available to the discretization software. This approach,
+however, was not considered in this work, as it couples the discretization phase
+with the selection of the solver. In any case,
+the assembly method does not affect the solution time, which was our primary
+optimization target.
+
+One final algorithmic detail remains. In the implementation of
+$\bm{M_{hyb}^{loc}}$, we need to compute the action of $\bm{A}$ immediately
+followed by the restriction $\bm{R_C}$. We can optimize this operation by
+precomputing the matrix $\bm{A_R} = \bm{R_C}\bm{A}$. From \eqref{R_C_structure}
+it follows that
+\[
+  \bm{A_R} = \left[d_{ij}\right]_{i=0,...,N_{\mathcal{H}}-1; j=0,...,n-1},
+  \text{ where } d_{ij} = \sum_{s=k\bar l_{i}}^{k\bar l_{i+1}-1} a_{sj}.
+\]
+
+We are now ready to present the algorithmic realization of the Schwarz preconditioners.
+The setup phase, common to both preconditioners, is outlined in
+Algorithm~\ref{preconditioner-setup-pseudocode}. Functions \textsc{M\_{add}}
+and \textsc{M\_{hyb}\_{loc}}, which multiply the respective preconditioning matrices
+by a vector, are defined in Algorithms~\ref{preconditioner-M-pseudocode}
+and \ref{preconditioner-M-hyb-pseudocode}, respectively.
+Since all algorithms operate solely on matrix representations of the operators,
+the boldface notation is omitted
+for notational clarity. Further implementation details are provided in the next section.
+
+\begin{algorithm}
+  % When editing this algorithm, go through all references and check whether
+  % the line numbers are correct.
+  \caption{ASM Preconditioner -- Setup}
+  \label{preconditioner-setup-pseudocode}
+  \KwIn{$A$, $k$, $l=(l_0, ..., l_{N_{\mathcal{H}}-1})$}
+  \KwOut{$\bar l$, \textsc{CoarseSolve}, \textsc{LocalSolve}$[0\slice N_H-1]$}
+  \BlankLine
+
+  $\bar l \gets \Call{CumulativeSums}{l}$  \Comment*[r]{\eqref{bar_l_i_def}}
+  \ParFor(\Comment*[f]{$A_i\gets R_iAR_i^T$}){$i=0, ..., N_H-1$} {
+    $A_i\gets A[ki \slice k(i + 1)-1][ki \slice k(i + 1)-1]$  \Comment*[r]{\eqref{A_i_structure}}
+  }
+  \ParFor(\Comment*[f]{$A_C\gets R_CAR_C^T$}){$i,j=0, ..., N_{\mathcal{H}}-1$} {
+    $(A_C)_{ij}\gets \Call{Sum}{A[k\bar l_{i} \slice k\bar l_{i + 1} - 1][k\bar l_{j} \slice k\bar l_{j + 1}-1]}$  \Comment*[r]{\eqref{A_C_structure}}
+  }
+  $\textsc{CoarseSolve} \gets \Call{InitCoarseSolver}{A_C}$  \Comment*[r]{e.g. sparse LU factorization of $A_C$}
+  \ParFor{$i=0, ..., N_{H}-1$} {
+    $\textsc{LocalSolve}[i] \gets \Call{InitLocalSolver}{A_i}$  \Comment*[r]{e.g. Cholesky factorization of $A_i$}
+  }
+\end{algorithm}
+
+\begin{algorithm}
+  % When editing this algorithm, go through all references and check whether
+  % the line numbers are correct.
+  \caption{ASM Preconditioner -- Multiplication by a vector}
+  \label{preconditioner-M-pseudocode}
+  \KwReq{$k$, $l$, $\bar l$, \textsc{CoarseSolve}, \textsc{LocalSolve}$[0\slice N_H-1]$}
+  \Function(\Comment*[f]{computes $Mx$, where $M$ is as in \eqref{M_matrix}}){M($x$)} {
+    \ParFor(\Comment*[f]{$x^C\gets R_C x$}){$i=0, ..., N_{\mathcal{H}}-1$} {
+      $x^{C}_i\gets \Call{Sum}{x[k\bar l_{i} \slice k \bar l_{i + 1}-1]}$  \Comment*[r]{\eqref{R_C_effect}}
+    }
+    \ParFor{$i=0, ..., N_H-1$} {
+      $x^{(i)}\gets x[ki \slice k(i + 1)-1]$  \Comment*[r]{$x^{(i)}\gets R_ix$ \eqref{R_i_effect}}
+    }
+    $y^{C}\gets \Call{CoarseSolve}{x^{C}}$  \Comment*[r]{$y^{C}\gets A_C^{-1}x^{C}$}
+    \ParFor{$i=0, ..., N_H-1$} {
+      $y^{(i)}\gets \textsc{LocalSolve}[i]\!\left(x^{(i)}\right)$  \Comment*[r]{$y^{(i)}\gets A_i^{-1}x^{(i)}$}
+    }
+    \ParFor(\Comment*[f]{$y \gets R_0^Ty^{(0)}+ ...+R_{N_H-1}^Ty^{(N_H-1)}$}){$i=0, ..., N_H-1$} {
+      $y[ki \slice k(i + 1) - 1] \gets y^{(i)}$  \Comment*[r]{\eqref{R_i_T_effect}}
+    }
+    $z\gets \Call{RepeatInterleave}{y^{C}, k\cdot l}$  \Comment*[r]{$z\gets R_C^T y^C$ \eqref{R_C_T_effect}}
+    \Return $y + z$
+  }
+\end{algorithm}
+
+
+\section{Implementation}
+\label{chap:implementation}
+
+This chapter describes our GPU implementation of the ASM solver for the linear
+system~\eqref{auf}. The implementation targets NVIDIA GPUs with compute capability 8.0 or
+higher, but we expect that the conclusions we draw from its evaluation
+in Chapter~\ref{chap:experiments} generalize to other highly parallel architectures.
+
+The code is included in the \texttt{dd\_solvers} package
+attached to this thesis. It addition to the ASM solver itself, it
+provides solvers suitable for its coarse and local components, as well as
+other methods used for preprocessing and performance comparison.
+
+We begin by outlining the implementation environment in
+Section~\ref{sec:hardware-and-software}, then review the dependencies
+among the project's components in Section~\ref{sec:solvers-overview}.
+Sections~\ref{sec:asm-preconditioner} and~\ref{sec:explicit-inverse-batch-solver}
+detail the implementations of the ASM preconditioner and one of the possible
+choices for its local component -- the explicit inverse batch solver. Next,
+Section~\ref{sec:cg-method} presents an optimized implementation of the
+(Preconditioned) CG method. Finally, Section~\ref{sec:amgx-preconditioner}
+describes the configuration of the AmgX solver, which serves as our performance
+baseline.
+
+\subsection{Hardware and Software Stack}
+\label{sec:hardware-and-software}
+
+The presented solver is implemented in Python 3 and relies on the PyTorch 2
+framework~\cite{pytorch,pytorch2} for GPU-accelerated linear algebra operations.
+If PyTorch operations prove insufficient, we implement custom CUDA kernels.
+Below we briefly summarize the CUDA programming model and highlight the
+aspects of PyTorch that are most relevant to our implementation.
+
+\subsubsection{CUDA Programming Model}
+\label{sec:gpu-programming-model}
+
+The architecture of Graphics Processing Unit (GPU) differs substantially from
+that of Central Processing Unit (CPU). While the CPU is designed to
+efficiently execute a sequence of operations, called a \emph{thread},
+and can run at most tens of complex threads concurrently, the GPU is optimized for
+executing thousands of threads in parallel, each performing a relatively
+simple task (see Figure~\ref{fig:gpu-vs-cpu}).
+Therefore to exploit the GPU's peak instruction throughput
+and memory bandwidth, which can exceed those of the CPU by orders of magnitude
+for comparable hardware cost, one needs algorithms that are \emph{massively parallel}:
+able to split the work into thousands or even millions of inexpensive, independent tasks
+\cite[Chapter~3]{cuda-guide}.
+
+% \begin{figure}
+%   \centering
+%   \includegraphics[width=0.8\textwidth]{gpu_vs_cpu}
+%   \caption{Comparison of CPU and GPU architectures. Individual \emph{cores} are
+%     single-threaded units; accesses to the global memory (\emph{DRAM})
+%     are buffered in smaller, but much faster \emph{caches}. The GPU
+%     devotes more transistors to data processing rather than data caching and
+%     control logic. Source: \cite[Figure 1]{cuda-guide}.}
+%   \label{fig:gpu-vs-cpu}
+% \end{figure}
+
+Because our implementation targets NVIDIA hardware, it follows the CUDA
+programming model \cite[Chapter 5]{cuda-guide}. In CUDA
+the basic unit of execution is a \emph{kernel}: a function
+executed in parallel by many GPU threads. Kernels are typically launched from
+the CPU and execute asynchronously, allowing the CPU to launch kernels
+without waiting for each to finish and thus keeping the GPU busy.
+The GPU is usually equipped with its own, high-bandwidth memory; data must be
+explicitly copied from the CPU to the GPU to be accessible to kernels,
+and vice versa. The typical workflow therefore consists of copying input data to the GPU,
+launching a series of kernels to process it, and finally copying the results back
+to the CPU.
+
+Each kernel contains code executed by a single GPU thread; these threads form blocks and blocks
+form a~grid. For the programmer's convenience, this grid
+might be indexed with one-, two- or three-dimensional coordinates. Because we use
+a one-dimensional distribution of work (such as one matrix
+row per thread) in all parallel algorithms presented in
+this work, our kernels naturally employ 1D grids and blocks. In the
+pseudocode, we use $thread\_global\_idx$ to denote the unique index of a
+thread in the grid, which in the CUDA model is expressed as
+\[
+  thread\_global\_idx = blockI\hspace{-1pt}dx.x \cdot blockDim.x + threadI\hspace{-1pt}dx.x,
+\]
+where $blockI\hspace{-1pt}dx$, $blockDim$ and $threadI\hspace{-1pt}dx$ denote
+the coordinates of the block in the grid, the dimensions of the block and the coordinates
+of the thread within the block, respectively.
+
+The native language for writing CUDA kernels is C++ with some extensions,
+commonly referred to as CUDA C++ \cite[Chapter 6]{cuda-guide}. We use it to
+implement the batched dense matrix\nobreakdash-vector product
+(see Section~\ref{sec:batched-dense-matrix-vector-product}),
+since it requires careful handling of type casting and direct calls to
+half-precision intrinsics. The majority of our kernels, however, are less low-level
+and are therefore written in a subset of Python supported by the CUDA target
+of a just-in-time compiler for Python -- Numba \cite{numba}.
+This choice simplifies integration with the PyTorch framework,
+which is used to implement the large part of the solver.
+Moreover, static parameters of the kernels,
+such as data types or the BSR block size, do
+need to be specified in advance, but can be inferred from the input tensors.
+Kernels are compiled on first invocation and then cached for all subsequent calls.
+
+\subsubsection{PyTorch}
+\label{sec:pytorch}
+
+PyTorch 2 \cite{pytorch,pytorch2} offers a convenient interface for
+linear algebra operations on both dense and sparse matrices and supports
+a variety of hardware backends, including CPUs, GPUs and TPUs. In particular,
+it can efficiently delegate certain operations to NVIDIA
+CUDA libraries, such as cuBLAS \cite{cublas} and cuSPARSE \cite{cusparse},
+which are highly optimized for NVIDIA GPUs. This makes PyTorch a suitable
+choice for our needs, even though it is primarily designed
+for applications in machine learning.
+
+Installing PyTorch with all dependencies required for optimal performance
+can be a complicated process and therefore it is recommended to use
+the official Docker container images released by NVIDIA \cite{pytorch-ngc}.
+The code presented in this work was tested on the container tagged as
+\texttt{nvcr.io/nvidia/pytorch:24.12-py3}, which includes Python 3.12.3,
+PyTorch 2.6.0 and NVIDIA CUDA 12.6.3. All additional solver dependencies
+are specified in the accompanying \texttt{Dockerfile}.
+
+The basic data structure in PyTorch is a \emph{tensor}, which is a
+multidimensional array with an associated data type. The tuple of its
+dimensions is usually referred to as its \emph{shape}. For example, a tensor
+of shape $(m, k, k)$ is a three-dimensional array that can be viewed as a~batch
+of $m$ square matrices of size $k\times k$, whereas a tensor
+of shape $(m,)$ is a one-dimensional vector of length $m$.
+
+PyTorch also supports a variety of sparse formats
+designed to efficiently store tensors with a large number of zero elements.
+The described solver operates on two of them:
+\emph{Compressed Sparse Row} (CSR) and \emph{Block Sparse Row} (BSR).
+For a detailed description of these formats,
+see \cite[Section 3.3]{cusparse}.
+
+By default, PyTorch performs tensor operations \emph{eagerly}, executing them
+immediately and often creating extraneous intermediate tensors, which may lead
+to significant performance degradation (see Sections~\ref{sec:preconditioner-solve}
+and \ref{sec:fused-operations} for some examples).
+PyTorch 2 addresses this issue via TorchDynamo and TorchInductor~\cite{pytorch2}.
+TorchDynamo analyses Python code, bulding a~computation graph, which is then
+just-in-time compiled by one of the available backends, TorchInductor being the
+default one. Utilizing these tools is as simple as
+extracting the code to be optimized into a function and decorating it with
+\verb|torch.compile|, see, e.g., Section~\ref{sec:preconditioner-solve}.
+
+\subsection{Solvers Overview}
+\label{sec:solvers-overview}
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=\textwidth]{solvers-uml}
+%   \caption{Hierarchy of solvers. Solid lines indicate inheritance, dashed lines
+%   -- composition.}
+%   \label{fig:solvers-uml}
+% \end{figure}
+
+The structure of the \texttt{dd\_solvers} package is illustrated in
+Figure~\ref{fig:solvers-uml}. It defines three abstract classes -- \verb|SparseSolver|,
+\verb|DenseBatchSolver| and \verb|SparseBatchSolver| -- which specify the
+interfaces for solvers handling a single CSR matrix, a batch of dense matrices,
+and a batch of CSR matrices, respectively. Because solvers of the same type share
+a common interface, they can be interchanged easily, facilitating performance
+comparisons.
+
+At the core of the package is \texttt{ASM}, in which we implement the preconditioner
+described in Algorithms~\ref{preconditioner-setup-pseudocode}
+and~\ref{preconditioner-M-pseudocode}. The details are discussed
+in Section~\ref{sec:asm-preconditioner}. \texttt{ASM} is parametrized by
+the choice of coarse and local solvers: the coarse solver must subclass
+\texttt{SparseSolver}, while the local solver
+may be either a \texttt{DenseBatchSolver} or a \texttt{SparseBatchSolver}.
+Dense batch solvers are preferable for small local problems (e.g.
+$\mathcal{T}_H=\mathcal{T}_h$), whereas sparse solvers suit larger subdomains
+(e.g. $\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}$).
+
+Since \texttt{ASM} is a preconditioner, it must
+be used in conjunction with an iterative method. Following Section~\ref{sec:additive-schwarz-method}
+we employ the Preconditioned Conjugate Gradient method \cite[Chapter~9.2]{Saad}.
+As it is not provided by either PyTorch or cuSPARSE, we implement it ourselves
+in the \texttt{CG} class. Any \verb|SparseSolver| can serve as
+a~preconditioner; setting it to \verb|None| (default) yields an unpreconditioned CG solver.
+The implementation is described in Section~\ref{sec:cg-method}.
+
+In \verb|CUDSS| solver we provide a Python interface (with a C++ backend) to
+the NVIDIA cuDSS library (v0.6.0)~\cite{cudss}, which
+is a a high-performance direct sparse solver. As \verb|CUDSS| implements the \texttt{SparseSolver}
+interface, it can be used either as the coarse solver within \texttt{ASM}
+or as a~standalone solver for \eqref{auf}.
+NVIDIA cuDSS can employ more efficient algorithms when the matrix
+is symmetric and positive definite. As it is the case for
+the stiffness matrix~$\bm{A}$, as well as for the coarse solver matrix $\bm{A_C}$,
+this option is enabled.
+
+Available dense batch solvers for the \verb|ASM| local subproblems are
+\texttt{LU}, \texttt{Cholesky} and \texttt{Inv}, which implement LU decomposition,
+Cholesky factorization and direct multiplication by the inverse, respectively.
+The first two are thin wrappers around PyTorch's built-in batched solvers,
+while \texttt{Inv} is our custom implementation of the explicit inverse
+batch solver, described in Section~\ref{sec:explicit-inverse-batch-solver}.
+The sole sparse batch solver, \texttt{BatchCUDSS}, leverages
+the abilities of cuDSS to solve a batch of linear systems
+with matrices in the CSR format. As in \texttt{CUDSS}, the matrices are assumed
+to be symmetric and positive definite, which is the case for the local solvers'
+matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$.
+
+We also include a GPU-based algebraic multigrid preconditioner as our performance
+baseline. This preconditioner wraps the NVIDIA AmgX library \cite{amgx}
+via the \verb|pyamgx| bindings~\cite{pyamgx} and is provided by the \texttt{AMGX} class
+in our package. Configuration details are discussed
+in Section \ref{sec:amgx-preconditioner}.
+
+As will be later demonstrated in Chapter~\ref{chap:experiments}, applying the preconditioner
+in lower precision than the original matrix can deliver a significant performance
+improvement. Accordingly, we supplement the ASM
+preconditioner with two levels of precision control. First, the \texttt{precision}
+attribute of the \texttt{ASM} class may be set to either \verb|float64| or
+\verb|float32|, which dictates the precision of the entire preconditioner
+-- including both coarse and local solvers. Second, when the batch solver is a
+direct inverse, the \verb|precision| attribute of the \texttt{Inv} class can
+reduce the local solver's precision to 16 bits (\verb|bfloat16| or
+\verb|float16|). We also allow the \verb|AMGX| preconditioner to run in
+either single (\verb|float32|) or double (\verb|float64|) precision.
+
+We conclude this section by illustrating the flexibility of the \texttt{dd\_solvers}
+package with examples of constructing \texttt{SparseSolver} instances in
+Listing~\ref{lst:creating-solvers}.
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Example \texttt{SparseSolver} instances.},
+  label={lst:creating-solvers},
+  style=Python
+]
+# Example 1: Direct solver using cuDSS.
+s1 = CUDSS()
+
+# Example 2: Unpreconditioned CG solver with default settings.
+s2 = CG()
+
+# Example 3: PCG with AmgX preconditioner applied in single precision.
+s3 = CG(AMGX(precision=torch.float32))
+
+# Example 4: PCG with ASM preconditioner using sparse direct solvers
+# for both coarse and local problems.
+s4 = CG(ASM(
+    coarse_solver=CUDSS(),
+    local_solver=BatchCUDSS(),
+))
+
+# Example 5: PCG with ASM preconditioner applied in single precision,
+# using dense local solver in a 16-bit precision.
+s5 = CG(ASM(
+    precision=torch.float32,
+    coarse_solver=CUDSS(),
+    local_solver=Inv(precision=torch.bfloat16),
+))
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+
+\subsection{ASM Preconditioner}
+\label{sec:asm-preconditioner}
+
+We now describe the implementation of the ASM preconditioner,
+outlined in Algorithms~\ref{preconditioner-setup-pseudocode}
+and~\ref{preconditioner-M-pseudocode}.
+The setup phase (see Algorithm~\ref{preconditioner-setup-pseudocode})
+begins with constructing the coarse and local solvers' matrices, as detailed in Sections
+\ref{sec:local-solvers-assembly} and \ref{sec:coarse-solver-assembly}. Next,
+the coarse and local solvers are initialized using their \texttt{setup} methods.
+
+The multiplication by $\bm{M}$ (see Algorithm~\ref{preconditioner-M-pseudocode})
+-- which can be interpreted as an approximate solution of a system with $\bm{A}$
+-- is implemented in the \texttt{solve} method of the \texttt{ASM}
+class. Once the preconditioner is set up, it can be applied repeatedly to
+different right-hand sides. Implementation details are provided in
+Section~\ref{sec:preconditioner-solve}.
+
+Note that the ASM preconditioner requires a specific ordering of the unknowns,
+as described in Section~\ref{sec:preconditioner-alg}. If this ordering cannot be
+imposed during the discretization phase (which should be the preferred and
+inexpensive approach for production use),
+an additional preprocessing step is required to
+permute the system matrix $\bm{A}$. Consequently, each solve also entails permuting
+the right-hand side vector $\bm{f}$ prior to, and the solution vector $\bm{u^*}$
+after a call to \verb|solve|. For such an occasion,
+the \verb|dd_solvers| package supplies utility functions that perform these permutations
+efficiently, given the three mappings: from fine elements to unknowns, from
+fine elements to solver subdomains, and from solver subdomains to coarse elements.
+
+\subsubsection{Construction of the Local Solvers' Matrices}
+\label{sec:local-solvers-assembly}
+
+The procedure for constructing the matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$ depends
+on the choice of the local solver, which might be either a \texttt{DenseBatchSolver}
+or a \texttt{SparseBatchSolver} (see Section~\ref{sec:solvers-overview}). In
+both cases, we develop tailored CUDA kernels. While expressing these constructions in
+PyTorch is possible, it requires creating intermediate indexing tensors, which substantially
+increase memory usage during setup and thus limit the maximum problem size that
+can be handled. Our kernels overcome these limitations.
+
+\paragraph{Dense case}
+
+By our requirements, all local matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$ have identical dimensions
+$k \times k$, where $k$ is the number of DoFs per local solver. Consequently, they can
+be stored in a single tensor of shape $(N_H, k, k)$, which is the format expected
+by \texttt{DenseBatchSolver} and enables efficient batched solutions.
+
+\begin{algorithm}
+  \caption{Construction of the local solvers' matrices -- dense case}
+  \label{alg:assemble-local-matrices-dense}
+  $row \gets thread\_global\_idx$\;
+  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return }
+  $solver \gets \lfloor row\ /\ k\rfloor $\;
+  $local\_row \gets row\!\!\mod k$\;
+  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
+    $col \gets A.col\_indices[i]$\;
+    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
+       $local\_col \gets col\!\!\mod k$\;
+       $local\_mat[solver][local\_row][local\_col] \gets A.values[i]$\;
+    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
+       \Return
+    }
+  }
+\end{algorithm}
+
+Assembly proceeds as follows.
+First, a tensor $local\_mat$ of shape $(N_H, k, k)$ is allocated on the GPU and filled with
+zeros. Then, the kernel sketched in Algorithm~\ref{alg:assemble-local-matrices-dense}
+iterates over the nonzero entries of the stiffness matrix $\bm{A}$, with each
+thread responsible for a single row. If the processed
+element has coordinates $(row, col)$ in~$\bm{A}$, it belongs
+to the local solver's matrix $\bm{A_{solver}}$ precisely when
+$solver = \lfloor row / k \rfloor = \lfloor col / k \rfloor$ (see \eqref{A_i_structure}).
+In turn, its local coordinates are $(row\!\!\mod k, col\!\!\mod k)$. It
+is assumed that the column indices in the CSR representation of $\bm{A}$
+are sorted within each row\footnote{This assumption is formally included in the
+CSR format definition. However, cuSPARSE allows a relaxed definition,
+which only requires that the column
+indices are unique within each row, not necessarily sorted \cite[Section~3.3.3]{cusparse}.}, and therefore the loop over the row's entries
+can be terminated as soon as $\lfloor col / k \rfloor > solver$.
+
+\paragraph{Sparse case}
+
+If the local matrices are large enough, it may pay off to turn to a sparse local
+solver, which is represented by the \texttt{SparseBatchSolver} class. In this case,
+the local matrices are stored in a~single \texttt{CSRBatch} object, a
+data structure defined in \texttt{dd\_solvers}.
+
+A \texttt{CSRBatch} stores a batch of CSR matrices $\bm{A_0}, ..., \bm{A_{N-1}}$
+as a tuple of five tensors:
+\begin{itemize}
+  \item \textit{nrows} -- a tensor of shape $(N,)$ containing the number of rows
+    in each matrix $\bm{A_i}$,
+  \item \textit{nnz} -- a tensor of shape $(N,)$ containing the number of nonzero
+    entries in each matrix~$\bm{A_i}$,
+  \item \textit{crow\_indices} -- a tensor of shape $(\sum_{i=0}^{N-1} (nrows[i] + 1),)$
+    containg the concatenated row-offset arrays of all matrices~$\bm{A_i}$,
+  \item \textit{col\_indices} -- a tensor of shape $(\sum_{i=0}^{N-1} nnz[i],)$
+    containing the concatenated column index arrays of all matrices~$\bm{A_i}$,
+  \item \textit{values} -- a tensor of shape $(\sum_{i=0}^{N-1} nnz[i],)$
+    containing the concatenated value arrays of all matrices~$\bm{A_i}$.
+\end{itemize}
+Here $N=N_H$ and the $nrows$ tensor is filled with~$k$. The remaining
+\texttt{CSRBatch} tensors are constructed in two stages.
+
+First, we compute the tensor $per\_row\_count$ of shape $(n,)$,
+where $per\_row\_count[r]$ is the number of nonzero entries in the $r$-th row of
+$\bm{A}$ that belong to the local solver's matrix $\bm{A_{\lfloor r/k \rfloor}}$.
+It is also the number of nonzero entries in the ${(r\!\!\mod k)}$\nobreakdash-th row
+of $\bm{A_{\lfloor r/k \rfloor}}$. The $per\_row\_count$ tensor is computed
+by the CUDA kernel which implements Algorithm~\ref{alg:assemble-local-matrices-sparse-i}.
+Iteration over the elements of $\bm{A}$ and mapping them to the local
+solvers' matrices is performed in the same way as in the dense case (cf.
+Algorithm~\ref{alg:assemble-local-matrices-dense}).
+
+\begin{algorithm}
+  \caption{Construction of the local solvers' matrices -- sparse case, stage 1}
+  \label{alg:assemble-local-matrices-sparse-i}
+  $row \gets thread\_global\_idx$\;
+  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return }
+  $solver \gets \lfloor row\ /\ k\rfloor $\;
+  $count \gets 0$\;
+  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
+    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
+        $count\!+\!+$
+    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
+        \Return
+    }
+  }
+  $per\_row\_count[row] \gets count$
+\end{algorithm}
+
+Once the $per\_row\_count$ array is available, the $nnz$ tensor is obtained
+by summing the entries of $per\_row\_count$ for each local solver. Since the
+number of DoFs per each local solver is $k$, it can be computed as
+\begin{verbatim}
+  nnz = per_row_count.reshape(-1, k).sum(dim=1).
+\end{verbatim}
+
+The same $per\_row\_count$ array is used to compute the $row\_of\!f\!set$ tensor,
+which is a~cumulative sum of the $per\_row\_count$ entries, i.e.
+\begin{equation}
+row\_of\!f\!set[0] = 0,\quad row\_of\!f\!set[i] = \textstyle\sum_{j=0}^{i-1} per\_row\_count[j]
+\quad \text{for }i=1,...,n.\label{eq:row-offset}
+\end{equation}
+In PyTorch, the parallel cumulative sum is efficiently implemented via
+the \verb|cumsum| function. Note that $row\_of\!f\!set[n]$ equals
+the total number of nonzero entries across all local solvers' matrices, which determines
+the lengths of the $col\_indices$ and $values$ tensors. We then
+allocate those tensors together with $crow\_indices$ of
+shape $(N_H \cdot (k + 1),)$.
+
+In the second stage, the CUDA kernel implementing Algorithm~\ref{alg:assemble-local-matrices-sparse-ii}
+fills $crow\_indices$, $col\_indices$, and $values$.
+Elements in the row $r$ of $\bm{A}$ that should be placed in one of the local solvers'
+matrices are identified in the same way as before. Their values and column indices
+are written in the corresponding tensors at positions
+$row\_of\!f\!set[r], ..., row\_of\!f\!set[{r + 1}] - 1$. Finally, the $crow\_indices$
+entries are computed from $row\_of\!f\!set$ via
+\[
+crow\_indices[s \cdot (k + 1) + l] = row\_of\!f\!set[s \cdot k + l] - row\_of\!f\!set[s \cdot k],
+\]
+for $s = 0, ..., N_H - 1$ and $l = 0, ..., k$.
+
+\begin{algorithm}
+  \caption{Construction of the local solvers' matrices -- sparse case, stage 2}
+  \label{alg:assemble-local-matrices-sparse-ii}
+  $row \gets thread\_global\_idx$\;
+  \lIf {$row \geq A.crow\_indices.size - 1$} {\Return}
+  $solver \gets \lfloor row\ /\ k\rfloor $\;
+  $local\_row \gets row\!\!\mod k$\;
+  $out\_ind \gets row\_of\!f\!set[row]$\;
+  $first\_solver\_ind \gets row\_of\!f\!set[solver \cdot k]$\;
+  \uIf {$local\_row = 0$} {
+    $local\_crow\_indices[solver \cdot (k + 1)] \gets out\_ind - first\_solver\_ind$
+  }
+  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
+    $col \gets A.col\_indices[i]$\;
+    \uIf {$\lfloor col\ /\ k\rfloor = solver$} {
+      $local\_col \gets col\!\!\mod k$\;
+      $local\_values[out\_ind] \gets A.values[i]$\;
+      $local\_col\_indices[out\_ind] \gets local\_col$\;
+      $out\_ind\!+\!+$
+    } \uElseIf {$\lfloor col\ /\ k\rfloor > solver$} {
+      \Break
+    }
+  }
+  $local\_crow\_indices[solver \cdot (k + 1) + local\_row + 1] \gets out\_ind - first\_solver\_ind$
+\end{algorithm}
+
+\subsubsection{Construction of the Coarse Solver's Matrix}
+\label{sec:coarse-solver-assembly}
+
+Construction of the coarse solver's matrix $\bm{A_C}$ (lines 5--7 of Algorithm
+\ref{preconditioner-setup-pseudocode}) first assembles the matrix in PyTorch's
+Coordinate (COO) format for sparse tensors \cite[Sparse COO tensors]{torch-sparse},
+and then converts it to CSR format expected by \verb|SparseSolver|.
+
+In COO format,
+a~sparse 2D matrix with $m$ nonzero entries is represented by two tensors:
+\begin{itemize}
+  \item $indices$ -- a tensor of shape $(2, m)$, where the first row contains
+    the row indices and the second row contains the column indices of the nonzero
+    entries;
+  \item $values$ -- a tensor of shape $(m,)$ containing the corresponding
+    values of the nonzero entries.
+\end{itemize}
+PyTorch permits \emph{uncoalesced} COO tensors, in which $indices$ may include
+duplicates; the value at a given coordinate is then the sum of all duplicated entries.
+Converting such tensor to CSR requires \emph{coalescing}, which groups duplicate
+indices and sums their values.
+
+Let $solvers\_to\_coarse$ be a tensor of shape $(N_H,)$ such that
+$solvers\_to\_coarse[j]=i$ whenever $\Omega_j \subseteq D_i$ for
+$j=0, ..., N_H - 1$. One can compute it via
+\begin{verbatim}
+  torch.arange(n_coarse).repeat_interleave(solvers_per_coarse),
+\end{verbatim}
+where $n\_coarse$ is equal to $N_{\mathcal{H}}$ and $solvers\_per\_coarse$
+is a tensor of shape $(N_H,)$ containing the values $l_0, ..., l_{N_H - 1}$ (see \eqref{l_i_def}).
+From \eqref{A_C_structure}, an entry $(r,c)$ of the stiffness matrix $\bm{A}$
+contributes to entry $(r',c')$ of $\bm{A_C}$, where
+\begin{equation}
+  r' = solvers\_to\_coarse[\lfloor r / k \rfloor],\quad
+  c' = solvers\_to\_coarse[\lfloor c / k \rfloor].\label{rcr'c'}
+\end{equation}
+Thus, one can assemble $\bm{A_C}$ by creating an uncoalesced COO tensor of all
+nonzeros of $\bm{A}$ with indices mapped according to the above, then coalescing
+and converting to CSR.
+However, the coalescing step involves sorting the $indices$ tensor, which
+requires significant amount of additional memory. To mitigate this, we use the fact that
+elements from each row of $\bm{A}$ that map to the same entry of $\bm{A_C}$
+are contiguous in the CSR representation. We therefore group them during COO assembly;
+only contributions from different rows must be merged in the final coalescing step,
+reducing the additional memory required.
+
+The intermediate COO tensor is constructed in two stages. First, the
+CUDA kernel which implements Algorithm~\ref{alg:assemble-coarse-matrix-i} computes the tensor
+$per\_row\_count$ of shape $(n,)$. Here $per\_row\_count[r]$ is the number of
+entries in the COO tensor resulting from the reduction of the $r$-th row of $\bm{A}$.
+The kernel runs on a 1D CUDA grid, where each thread handles one
+row of $\bm{A}$. The mapping defined by \eqref{rcr'c'} determines which entries are summed.
+
+\begin{algorithm}
+  \caption{Construction of the coarse solver's matrix -- stage 1}
+  \label{alg:assemble-coarse-matrix-i}
+  $row \gets thread\_global\_idx$\;
+  \lIf {$row \geq A.crow\_indices.size - 1$} { \Return }
+  $count \gets 0$\;
+  $prev\_block \gets -1$\;
+  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
+    $col \gets A.col\_indices[i]$\;
+    $col\_block \gets solvers\_to\_coarse[\lfloor col\ /\ k\rfloor]$\;
+    \uIf {$col\_block \neq prev\_block$} {
+      $count\!+\!+$\;
+      $prev\_block \gets col\_block$
+    }
+  }
+  $per\_row\_count[row] \gets count$
+\end{algorithm}
+
+Next, the tensor $row\_of\!f\!set$ is computed as in \eqref{eq:row-offset}. Its
+final entry, $row\_of\!f\!set[n]$, equals the total number of COO entries and
+thus defines the lengths of $out\_values$ and $out\_indices$ tensors. In the
+second stage, the CUDA kernel realizing Algorithm~\ref{alg:assemble-coarse-matrix-ii}
+fills these tensors. Entries of row $r$
+of $\bm{A}$ are grouped as before, their values are summed, and the result is
+written to $out\_indices$ and $out\_values$ at positions
+$row\_of\!f\!set[r], ..., row\_of\!f\!set[r+1]-1$.
+
+\begin{algorithm}
+  \caption{Construction of the coarse solver's matrix -- stage 2}
+  \label{alg:assemble-coarse-matrix-ii}
+  $row \gets thread\_global\_idx$\;
+  \lIf {$row \geq A.crow\_indices.size - 1$} { \Return }
+  $row\_block \gets solvers\_to\_coarse[\lfloor row\ /\ k\rfloor]$\;
+  $out\_ind \gets row\_of\!f\!set[row]$\;
+  $block\_sum \gets 0$\;
+  $prev\_block \gets -1$\;
+  \For {$i \gets A.crow\_indices[row];\; i < A.crow\_indices[row + 1];\; i\!+\!+$} {
+    $col \gets A.col\_indices[i]$\;
+    $col\_block \gets solvers\_to\_coarse[\lfloor col\ /\ k\rfloor]$\;
+    \uIf {$col\_block \neq prev\_block$} {
+      \uIf {$prev\_block \neq -1$} {
+          $out\_indices[0, out\_ind] \gets row\_block$\;
+          $out\_indices[1, out\_ind] \gets prev\_block$\;
+          $out\_values[out\_ind] \gets block\_sum$\;
+          $out\_ind\!+\!+$\;
+          $block\_sum \gets 0$
+      }
+      $prev\_block \gets col\_block$
+    }
+    $block\_sum\ +\!= A.values[i]$
+  }
+
+  \uIf {$prev\_block \neq -1$} {
+      $out\_indices[0, out\_ind] \gets row\_block$\;
+      $out\_indices[1, out\_ind] \gets prev\_block$\;
+      $out\_values[out\_ind] \gets block\_sum$
+  }
+\end{algorithm}
+
+Finally, the COO tensor formed by $out\_indices$ and
+$out\_values$ is coalesced and converted to the CSR format, yielding
+the CSR representation of the coarse solver's matrix $\bm{A_C}$.
+
+\subsubsection{Multiplication by a Vector}
+\label{sec:preconditioner-solve}
+
+The implementation of computing the preconditioner's action on a vector
+is concise enough to appear in its entirety in Listing~\ref{lst:preconditioner-solve}.
+Only metadata handling is omitted for clarity.
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Implementation of preconditioner's multiplication by a vector.},
+  label={lst:preconditioner-solve},
+  style=Python
+]
+@torch.compile
+def solve(self, x: torch.Tensor) -> torch.Tensor:                # $x\mapsto Mx$
+  x_lower_precision = x.to(self.preconditioner_precision or x.dtype)
+  x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+  x_c = torch.segment_reduce(                                  # $x^C \gets R_C x$
+    x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
+  )
+  x_i = x_lower_precision.reshape(self.n_solvers, -1)          # $x^{(i)} \gets R_i x$
+  y_c = self.coarse_solver.solve(x_c)                        # $y^C \gets A_C^{-1} x^C$
+  y_i = self.local_solvers.solve(x_i)                       # $y^{(i)} \gets A_i^{-1} x^{(i)}$
+  y = y_i.flatten()                           # $\hspace{3pt} y \gets R_0^T y^{(0)} + ... + R_{N_H-1}^T y^{(N_H-1)}$
+  y_solvers = y_c.repeat_interleave(
+    self.solvers_per_coarse, output_size=self.n_solvers
+  )
+  y += y_solvers.repeat_interleave(                          # $\hspace{4pt} y\ +\!= R_C^T y^C$
+    self.dofs_per_solver, output_size=y.shape[0]
+  )
+  return y.to(x.dtype)
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+
+First, the $n$-element input vector $x$ is converted to lower precision if it is enabled
+in the preconditioner configuration. Next, the vector $x^C=R_C x$ (cf.
+Algorithm~\ref{preconditioner-M-pseudocode}, lines 2\nobreakdash--4) is computed and stored
+in the tensor \verb|x_c|. Since this step sums consecutive blocks of
+$kl_0, ..., kl_{N_H-1}$ elements of $x$, it can be split into two stages.
+First, consecutive blocks of
+$k$ elements of $x$ are summed (line 4) to form \verb|x_solvers| of
+shape $(N_H,)$. Then, consecutive blocks of $l_0, ..., l_{N_H-1}$ elements of
+\verb|x_solvers| are summed (lines 5--7) to produce \verb|x_c| of shape
+$(N_{\mathcal{H}}, )$. The tensor \verb|solvers_per_coarse_scan| passed to the
+\verb|segment_reduce| function should contain the cumulative sums
+$\bar l_0, ..., \bar l_{N_{\mathcal{H}}-1}$ defined in \eqref{bar_l_i_def}.
+Such two-stage reduction leverages the regularity of the step involving the
+largest number of elements and was found to be more efficient than a single
+reduction over the entire $x$. Note that this optimization relies on the
+assumption of a constant number of unknowns per solver
+(see Section~\ref{sec:preconditioner-alg}).
+
+Then, the two-dimensional tensor \verb|x_i| of shape $(N_H, k)$ is defined to
+represent the batch of vectors $x^{(i)}=R_i x$
+(cf. Algorithm~\ref{preconditioner-M-pseudocode}, lines 5--7). Since
+vectors $x^{(i)}$ comprise blocks of $k$ consecutive elements of $x$, their
+batched representation is obtained by simply \emph{reshaping}
+the tensor $x$. In other words, \verb|x_i| shares memory with
+\verb|x_lower_precision| and only indexes it differently; therefore no
+GPU computation is invoked in this step.
+
+Once \verb|x_c| and \verb|x_i| are available, the coarse and local
+solvers are invoked in lines 8--11 (cf. Algorithm~\ref{preconditioner-M-pseudocode},
+lines 8--11). The batch of outputs $y^{(i)}$ is
+\emph{flattened} to form the vector $y$ of shape $(n, )$ in line 11
+(cf. Algorithm~\ref{preconditioner-M-pseudocode}, lines 12--14). Again, this
+requires no additional GPU computation, as flattening only changes the
+interpretation of the indices.
+
+Lines 12--17 compute $z=R_C^T y^C$ (cf. Algorithm~\ref{preconditioner-M-pseudocode}, line 15)
+and add it to $y$ to yield the final result $y+z$.
+Similarly to the reduction of $x$ to $x^C$, this uses a two-step construction
+that we found to be more efficient than a single scatter operation.
+First, the tensor \verb|y_solvers| of shape $(N_H,)$ is
+constructed from \verb|y_c| by repeating the $i$-th element $l_i$ times. Then,
+each element of \verb|y_solvers| is added to $k$ consecutive elements of
+\verb|y|, yielding $y+z$.
+The result is finally converted back to the original precision in line 18.
+
+The entire method is decorated with \verb|torch.compile|
+(see Section~\ref{sec:pytorch}), which fuses compatible
+operations into a~single kernel. For example, downcasting in line 3 and
+summation in line 4 are combined to eliminate a redundant read of
+\verb|x_lower_precision|.
+
+\subsection{Explicit Inverse Batch Solver}
+\label{sec:explicit-inverse-batch-solver}
+
+Using the explicit inverse as a local solver in the ASM preconditioner
+may appear counterintuitive, since it may have worse numerical properties and requires a more
+expensive setup than standard solvers based on factorizations such as LU or Cholesky \cite{Higham}.
+Nevertheless, multiplication by the inverse exposes more parallelism than
+a triangular solve, as all elements of the output vector can be computed
+independently, which is particularly beneficial for highly\nobreakdash-parallel architectures
+such as GPUs. Therefore, we devoted additional effort to optimize the batch
+inverse solver.
+
+Its implementation is provided by the \verb|Inv| class. The
+setup phase computes the batch of inverses
+$\bm{A_0}^{-1}, ..., \bm{A_{N_H-1}}^{-1}$ with a single call to \verb|torch.linalg.inv|.
+The local solvers' matrices and their inverses are stored as
+three-dimensional tensors of shape $(N_H, k, k)$, where $k$ is the number of
+unknowns per solver.
+
+The solution phase reduces to computing the batched product (cf.
+Algorithm~\ref{preconditioner-M-pseudocode}, lines~9--11)
+\[
+  \bm{y^{(i)}}\gets \bm{A_i}^{-1}\bm{x^{(i)}},\quad i=0,...,N_H-1,
+\]
+where the batch of vectors $\bm{x^{(i)}}$ is provided as a two-dimensional tensor of shape
+$(N_H, k)$. This can be easily achieved in PyTorch using the matrix multiplication
+operator \verb|@| or the function \verb|torch.bmm|, both of which call
+\verb|cublas<t>gemvStridedBatched| under the hood. Unfortunately, our
+experiments revealed that this cuBLAS
+function performs poorly for small matrix sizes ($k < 64$), which are typical for
+the massively parallel variants of the ASM preconditioner. We therefore provide our own
+batched dense matrix-vector product implementation, described below.
+
+The \verb|Inv| class exposes a \verb|precision| attribute that permits internal
+downcasting of the stored inverse matrices to lower precision, which can
+improve the performance of the solution phase. Regardless of the internal
+storage precision of the inverses, the output vectors $\bm{y^{(i)}}$ produced
+by the solver always has the same precision as the input vectors $\bm{x^{(i)}}$ (as dictated by
+the ASM preconditioner), which may be either double (\verb|float64|) or
+single (\verb|float32|).
+
+\subsubsection{Batched Dense Matrix-Vector Product}
+\label{sec:batched-dense-matrix-vector-product}
+
+As an intermediate step in the \verb|Inv| implementation, we consider the following,
+slightly more general problem:
+given a batch of $N$ matrices of size $k \times k$ (stored as a tensor $mat$ of shape $(N, k, k)$)
+and a batch of $N$ vectors of size $k$ (stored as a tensor $x$ of shape $(N, k)$),
+compute the batched matrix-vector product and return the result as another tensor of
+shape $(N, k)$. As a~solution, we propose a CUDA kernel that employs a single thread to compute each element
+of the output tensor $y$, leading to the straightforward Algorithm~\ref{alg:batched-mat-vec}.
+A major advantage of this approach is that it supports any matrix size $k$.
+
+The matrices $mat$ are assumed to be
+stored in column-major order (cf. line 7), which ensures that most accesses to the
+elements of $mat$ can be coalesced (see \cite[Section 5.3.2]{cuda-guide}). This
+matches the \verb|Inv| solver use case, since the matrices $\bm{A_i}^{-1}$
+returned by \verb|torch.linalg.inv| are already in column-major order.
+Even if they were not, no additional steps would be required, because the matrices $\bm{A_i}$
+(and therefore their inverses $\bm{A_i}^{-1}$) are symmetric (see~\eqref{A_i_def}).
+
+\begin{algorithm}
+  \caption{Batched dense matrix-vector product kernel}
+  \label{alg:batched-mat-vec}
+  $t \gets thread\_global\_idx$\;
+  \lIf {$t \geq N k$} { \Return }
+  $b \gets \lfloor t / k \rfloor$\;
+  $r \gets t \!\!\mod k$\;
+  $acc \gets 0$\;
+  \For{$c \gets 0;\; c < k;\; c\!+\!+$} {
+    $mat\_elem \gets mat[b, c, r]$\;
+    $x\_elem \gets x[b, c]$\;
+    $mat\_elem\_higher\_prec \gets \Call{ConvertTo}{mat\_elem, \textbf{typeof}({x\_elem})}$\;
+    $acc\ +\!= mat\_elem\_higher\_prec \cdot x\_elem$
+  }
+  $y[b, r] \gets acc$
+\end{algorithm}
+
+Many combinations of $mat$, $x$, and $y$ are possible, but with the local solvers
+use case in mind, we implemented four variants, listed in Table~\ref{tab:gemv-precisions}.
+If the matrices $mat$ are stored in a 16-bit precision (\verb|float16| or \verb|bfloat16|),
+their elements are converted to single precision immediately after being
+fetched from memory (line 9). Thus multiplication
+and accumulation are always performed in the precision of vectors $x$ and $y$.
+Because these are only two floating\nobreakdash-point operations per element read from $mat$,
+the algorithm is memory-bound and reducing computation precision does not
+improve performance, which our experiments confirm.
+
+\begin{table}
+  \centering
+  \caption{Implemented variants of Algorithm \ref{alg:batched-mat-vec}.}
+  \label{tab:gemv-precisions}
+  \begin{tabular}{ccccc}
+    \toprule
+    $mat$ & $\times$ & $x$ & $=$ & $y$\\
+    \midrule
+    \verb|float64| & $\times$ & \verb|float64| & $=$ & \verb|float64|\\
+    \verb|float32| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
+    \verb|float16| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
+    \verb|bfloat16| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+As is usual for memory-bound operations, we measure the kernel performance
+in terms of achieved memory throughput, calculated
+as the ratio of the total size of the input and output tensors ($mat$, $x$, $y$)
+to the kernel execution time.
+We benchmarked this metric on an A100 GPU for all supported precisions and for
+$k=2,...,128$. For each $k$ we selected
+the largest batch size $N$ satisfying $Nk^2\leq 2^{30}$
+to saturate the GPU. The PyTorch implementation serves as a~baseline.
+Note that PyTorch requires $mat$ and $x$ to have the same precision;
+in mixed-precision cases we therefore downcast $x$ before
+multiplication and upcast the result $y$ afterwards. This introduces extra
+overhead and yields less accurate outputs than our implementation.
+
+The results of the comparison are shown in Figure~\ref{fig:matrix_vec_tput}.
+They indicate that our solution sustains high throughput
+across the tested matrix sizes: $71-86\%$ of the A100 theoretical peak
+memory bandwidth (according to the vendor datasheet)
+for \verb|float64| and \verb|float32|, and $64-79\%$
+for \verb|bfloat16| and \verb|float16|. Consequently, the theoretical upper
+bound on the speedup any alternative algorithm could obtain (on an A100) is
+approximately $1.16-1.56\times$, depending on precision and matrix size.
+However, reaching that bound requires sustained peak memory\nobreakdash-bandwidth utilization,
+which in practice is generally approached only by simple streaming operations
+(for example, large contiguous device-to-device copies).
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=\textwidth]{matrix_vec_tput}
+%   \caption{Performance of the batched dense matrix-vector product at different
+%   precisions: our implementation vs. PyTorch. The red line indicates the
+%   theoretical peak memory bandwidth of the A100 80GB SXM used in the experiments.}
+%   \label{fig:matrix_vec_tput}
+% \end{figure}
+
+In contrast, the
+PyTorch implementation performs poorly at the smallest matrix sizes, being
+$10-60\times$ slower than ours for $k\leq 4$. Its throughput grows with $k$
+and becomes competitive around $k\approx 64$, with the exact threshold
+depending on the precision. However, the ASM preconditioner primarily targets
+smaller matrix sizes when a~\verb|DenseBatchSolver| is used. In
+Chapter~\ref{chap:experiments} we show that, in most scenarios, the optimal
+choice is $21\leq k\leq 60$ with \verb|float16| precision -- settings for which
+our implementation is $1.54 - 4.42\times$ faster than PyTorch.
+Therefore we consistently employ our kernel in the \verb|Inv| class
+for all precisions and matrix sizes.
+
+\subsection{CG Method}
+\label{sec:cg-method}
+
+The implementation of the \texttt{CG} solver is based on the implementation
+of \texttt{cg} function from \texttt{scipy.sparse.linalg} module \cite{scipy-cg},
+with two important modifications which allow for better performance in our scenario:
+fused operations and using BSR format for the matrix-vector product. Additionally,
+to support the experiments in Section~\ref{sec:dependence-on-parameters},
+we implemented an estimator for the condition number of the preconditioned
+operator, computed from the PCG coefficients (see \cite[Section~6.7.3]{Saad}).
+
+\subsubsection{Fused Operations}
+\label{sec:fused-operations}
+
+A naive PyTorch implementation of a single CG iteration is presented in
+Listing~\ref{lst:cg-single-iter}. Because PyTorch operations are executed
+eagerly, such implementation results in creation of unnecessary intermediate
+tensors. For example, the execution of line 7
+consists of launching two GPU kernels. The first one computes the right-hand
+side \texttt{alpha * p} and stores it in the temporary tensor in the global memory.
+The second kernel reads the result and adds it to \texttt{x}. The number of costly
+memory operations can be reduced by fusing these two operations into a single
+one.
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Simplified PyTorch implementation of a single PCG iteration.},
+  label={lst:cg-single-iter},
+  style=Python
+]
+z = preconditioner.solve(r)
+rho_cur = torch.dot(r, z)
+beta = rho_cur / rho_prev
+p = z + beta * p
+q = A @ p
+alpha = rho_cur / torch.dot(p, q)
+x += alpha * p
+r -= alpha * q
+rho_prev = rho_cur
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+This could have been realized by calling \verb|torch.add(x, p, alpha=alpha, out=x)|.
+Unfortunately, the \verb|alpha| argument of \verb|torch.add| is currently
+expected to be a CPU scalar. Therefore in our case \verb|alpha| would be
+first transferred to the CPU, which would introduce an unnecessary
+synchronization point.
+
+However, it is not necessary to write a custom CUDA kernel to optimize this operation,
+thanks to the \verb|torch.compile| feature described in Section~\ref{sec:pytorch}.
+Applying it just to the expression in line 7 of
+Listing~\ref{lst:cg-single-iter} yields an almost twofold speedup.
+For example, on an NVIDIA A100 GPU with $x$ containing 100M elements,
+the execution time of line 7 decreases from 1.17\,ms to 0.67\,ms.
+Similar optimizations were applied to lines 4 and 8.
+
+\subsubsection{BSR Matrix-Vector Product}
+
+Looking at \ref{lst:cg-single-iter}, we see that most of the CG iteration
+consists of simple element-wise vector operations like dot product, addition or
+scalar multiplication. Therefore, the per-iteration cost is dominated by the preconditioner
+solve (line 1) and the matrix-vector product (line 5). The latter can become
+the most expensive step when using a lightweight preconditioner (such as massively
+parallel ASM) as confirmed by our benchmarks.
+
+We therefore optimize the computation of $\bm{A}\bm{p}$ by exploiting the block structure of the
+stiffness matrix $\bm{A}$. If the unknowns associated with each element
+form a sequence of consecutive entries (which is assured by the proper permutation), then the
+matrix $\bm{A}$ has a block-sparse structure, with block size $b$ equal to the number
+of unknowns per element. Specifically, the nonzero entries of $\bm{A}$ can be grouped
+into dense square blocks of size $b\times b$, where the nonzero blocks themselves form
+a sparse pattern. Consequently, $\bm{A}$ can be represented in the Block Sparse Row (BSR)
+format \cite[Section 3.3.6]{cusparse}. Compared to CSR, the BSR format reduces the size
+of the row-offset array by a factor of $b$ and the column-index array by a factor of $b^2$.
+
+Beyond memory savings, BSR format accelerates the matrix-vector
+product. To leverage this, the \verb|CG| class has an extra
+attribute \verb|bsr_matmul|, which enables the conversion of the matrix $\bm{A}$
+to the BSR format during the setup phase.
+
+Multiple BSR matrix-vector algorithms are available.
+The simplest approach is to use \texttt{cusparse<t>bsrmv} routine from the
+cuSPARSE library, which is accessible via a PyTorch
+interface. However, in our benchmarks it underperformed the CSR matrix-vector
+product from the same library.
+To improve performance, we implemented (in CUDA kernels)
+four algorithms from \cite{bsr-mv}: block-by-block (b-by-b),
+column-by-column (c-by-c), row\nobreakdash-per\nobreakdash-thread without synchronization (RPT) and
+row-per-thread with synchronization (RPT-S). Reductions in the block-by-block and
+column-by-column kernels use warp-shuffle operations \cite[Section 10.22]{cusparse}.
+All implemented kernels
+run on a one-dimensional grid, with block size 32 for the RPT and RPT-S
+kernels, and an experimentally chosen 256 for the block-by-block and column\nobreakdash-by\nobreakdash-column
+kernels.
+
+We also introduce a modified RPT variant: RPT-I, which assigns
+rows to threads irrespective of thread block boundaries (see
+Algorithm~\ref{alg:bsr-mv-naive}). In the pseudocode, the BSR matrix $A$ is
+represented by the arrays $A.crow\_indices$,
+$A.col\_indices$ and $A.values$. The algorithm computes the matrix-vector product
+$Ax$ and stores the result in the $global\_out$ array. The RPT-I kernel likewise
+executes on a one-dimensional grid but uses a~block size of 256.
+
+\begin{algorithm}
+  \caption{RPT-I multiplication kernel}
+  \label{alg:bsr-mv-naive}
+  $target\_row \gets thread\_global\_idx$\;
+  $target\_block\_row \gets \lfloor target\_row\ /\ b\rfloor$\;
+  \lIf {$target\_block\_row \geq A.crow\_indices.size - 1$} { \Return }
+  $r \gets target\_row\!\!\mod b$\;
+  $first\_block \gets A.crow\_indices[target\_block\_row]$\;
+  $after\_last\_block \gets A.crow\_indices[target\_block\_row + 1]$\;
+  $local\_out \gets 0$\;
+  \For{$block \gets first\_block;\; block < after\_last\_block;\; block\!+\!+$} {
+    \For{$c\gets 0;\; c < b;\; c\!+\!+$} {
+        $A\_elem \gets A.values[block][r][c]$\;
+        $x\_elem \gets x[A.col\_indices[block] \cdot bs + c]$\;
+        $local\_out\ +\!= A\_elem \cdot x\_elem$
+    }
+  }
+  $global\_out[target\_row] \gets local\_out$
+\end{algorithm}
+
+All variants were benchmarked on stiffness matrices for
+several model problems of different sizes, with polynomial degress $p=1,...,5$ in 2D and $p=1,2,3$
+in 3D case. The indices were stored as 32-bit integers in all cases, while the
+data type of the matrix entries (and the whole computation) was either 32-bit
+or 64-bit floating point. The time was measured on an NVIDIA A100 GPU and
+an NVIDIA H100 GPU. Results appear in Table~\ref{tab:bsr-mv-benchmark}.
+
+% \begin{table}
+%   \caption{Speedup of our implementations of the BSR matrix-vector product over the
+%   CSR matrix-vector product available in cuSPARSE. Block-by-block algorithm requires
+%   $b\leq 5$.}
+%   \label{tab:bsr-mv-benchmark}
+%   \input{tables/benchmark_bsrmv.tex}
+% \end{table}
+
+The benchmarks demonstrate that the time of the matrix-vector product can be
+significantly reduced by using BSR format, with the best speedups reaching
+up to $2\times$ in single precision and $1.73\times$ in double precision.
+While there is no algorithm that consistently outperforms CSR in every scenario,
+the best overall results are achieved by the RPT-I algorithm.
+It is only outperformed by CSR on small problems with $b=3$ and by RPT-S when
+$b$ is large (15 or 21) in double precision. Both block-by-block and column-by\nobreakdash-column
+perform poorly on our hardware, likely due to architectural
+differences from the Kepler GPUs used in \cite{bsr-mv}. The cuSPARSE BSR routine
+is competitive only at $b=4$, where RPT-I is still the fastest one. Note that
+our comparison focuses on problems with more than three million unknowns; results
+for smaller systems may differ.
+
+Since the experiments in Chapter~\ref{chap:experiments} are run on
+an A100 GPU and use double precision (fp64), we adopt the following heuristic
+-- based on the benchmarks presented --
+to select the BSR matrix\nobreakdash-vector product algorithm:
+if $b<15$ use RPT-I, otherwise  use RPT-S.
+
+\subsection{Reference AmgX Preconditioner}
+\label{sec:amgx-preconditioner}
+
+AmgX \cite{amgx, amgx-reference} is a high-performance NVIDIA library for solving
+large sparse linear systems on NVIDIA GPUs. It provides a variety of
+algebraic multigrid (AMG) preconditioners and Krylov subspace solvers which
+can be flexibly combined and configured. Due to the large number of possible configurations,
+careful selection is necessary to achieve optimal performance for a given problem
+and, in our case, to ensure a "fair" comparison with our ASM implementation.
+
+We followed the procedure below to select an AmgX configuration. Starting from all
+example configurations provided with AmgX (\verb|AMGX/src/configs|), we modified any that used
+GMRES or FGMRES to use PCG instead, and employed a stopping criterion that reduces
+the initial Euclidean norm of the residual by a factor of $10^9$. Benchmarks
+used system \eqref{auf} obtained for $p=1$ and $\mathcal{T}_h$ being a uniform
+simplicial mesh ($\mathcal{S}_m^d$) of a unit square ($d=2$) or a~unit cube ($d=3$);
+see Section~\ref{sec:experimental-setup} for details on the meshes.
+
+We first tested small problems: 12k DoFs in 2D and 25k DoFs in 3D
+($\mathcal{T}_h\in \{\mathcal{S}_6^2, \mathcal{S}_3^3\}$), to identify
+configurations that successfully converge. We then benchmarked the convergent configurations
+on medium problems: 393k DoFs in 2D and 197k DoFs in 3D
+($\mathcal{T}_h\in \{\mathcal{S}_8^2, \mathcal{S}_5^3\}$), and retained those
+that were at most 50\% slower than the fastest one in each dimension.
+Finally, we ran the selected configurations on large problems:
+25M DoFs in 2D and 50M DoFs in 3D ($\mathcal{T}_h\in \{\mathcal{S}_{11}^2, \mathcal{S}_7^3\}$).
+The configuration named \verb|GMRES_AMG_D2| and all configurations that
+used the HMIS coarsening selector were excluded as they produced runtime errors
+on the large 3D problem.  This left four configurations (the same set in both dimensions),
+which we list in Tables~\ref{tab:2d-amgx-configs} and~\ref{tab:3d-amgx-configs}.
+
+% \begin{table}
+%   \centering
+%   \caption{Performance of AmgX configurations on A100: 2D problem with 25M DOFs.}
+%   \label{tab:2d-amgx-configs}
+%   \input{tables/amgx_2d.tex}
+% \end{table}
+
+% \begin{table}
+%   \centering
+%   \caption{Performance of AmgX configurations on A100: 3D problem with 50M DOFs.}
+%   \label{tab:3d-amgx-configs}
+%   \input{tables/amgx_3d.tex}
+% \end{table}
+
+All selected configurations employ a classical algebraic multigrid preconditioner
+with a~V\nobreakdash-cycle and parallel coarsening algorithm (PMIS). They differ
+in the choice of smoother and interpolation operator. See the AmgX
+documentation \cite{amgx-reference} for details on these options and their
+parameters. \verb|AMG_CLASSICAL_AGGRESSIVE_L1| is the fastest configuration in both
+dimensions, but we retain all four for the experiments in
+Chapter~\ref{chap:experiments}, since those scenarios include larger $p$
+and mixed-precision arithmetic, which may affect the relative performance of
+the configurations.
+Note that we did not further tune AmgX settings here; additional performance
+gains may be possible through parameter optimization.
+
+The preconditioners used in the selected configurations are exposed in the
+\verb|dd_solvers| module via the \verb|AmgX| class. Its constructor accepts
+a configuration name, which might be one of
+\verb|AGGRESSIVE_L1|, \verb|L1_TRUNC|, \verb|AGGRESSIVE_L1_TRUNC|, or
+\verb|AGGRESSIVE_CHEB_L1_TRUNC| (we omit the common \verb|AMG_CLASSICAL_| prefix
+for brevity). Using \verb|AMGX| together with our \verb|CG| class
+corresponds to the original AmgX configurations listed in
+Tables~\ref{tab:2d-amgx-configs} and~\ref{tab:3d-amgx-configs}, except that the
+AmgX PCG solver is replaced by our PCG implementation.
+
+\section{Parameter Tuning and Performance Evaluation}
+\label{chap:experiments}
+
+In this chapter we experimentally evaluate the performance of our implementation
+of the ASM solver described in Chapter~\ref{chap:implementation}. The experimental
+setup is detailed in Section~\ref{sec:experimental-setup}. We first verify
+theoretical properties of the preconditioned ASM operator in
+Section~\ref{sec:dependence-on-parameters}. Next, Section~\ref{sec:precision-experiments}
+examines the effect of using lower precision arithmetic,
+and Section~\ref{sec:experiments-parallelism} investigates the impact of
+of the coarse and local solvers' mesh choices. Finally,
+Section~\ref{sec:experiments-amgx-comparison} compares our implementation to
+the reference AmgX preconditioner.
+
+\subsection{Experimental Setup}
+\label{sec:experimental-setup}
+
+In all experiments we consider $\Omega=(0, 1)^d$ with $d\in \{2, 3\}$ and fix
+$\rho(x)=1+\sum_{i=1}^d x_i^2$. We set $\delta=7$ for $d=2$ and $\delta=17$ for $d=3$.
+If not stated otherwise, the right-hand side vector $\bm{f}$ is manufactured such that
+$u(x)=\prod_{i=1}^d \sin(4\pi x_i)$ is the exact solution of \eqref{div_eq}.
+Note that the experiments are conducted in the general three-grid scenario
+with $p\geq 1$, which is not covered by either Theorem~\ref{thm:Przykry-asm}
+or~\ref{thm:two-meshes-asm}, but was partially addressed in~\cite{Przykry-hp}.
+In this setting we expect the condition number of the preconditioned operator
+$T$ to satisfy
+\[
+  \kappa(T)\lesssim p^2\frac{\mathcal{H}^2}{hH}.
+\]
+
+We introduce two types of uniform meshes for use in the experiments: consisting
+of either only hypercubes or only simplices. For $d\in\{2, 3\}$ and integer $m\geq 0$, let
+$\mathcal{C}_m^d$ denote the partition of $(0, 1)^d$ into $2^{md}$ equal hypercubes
+(squares in 2D, cubes in 3D) of side length~$2^{-m}$. The mesh $\mathcal{S}_m^d$
+is obtained by subdividing each hypercube of $\mathcal{C}_m^d$ into simplices:
+by the natural diagonal subdivision into $2$ triangles in 2D, and by the
+Coxeter-Freudenthal-Kuhn triangulation (see, e.g., \cite{tetrahedral-subdivision})
+into $6$ tetrahedra in 3D. When the dimension is clear from the context we
+drop the superscript and write $\mathcal{C}_m$ and $\mathcal{S}_m$.
+
+Examples for $d=2$ are shown in Figure~\ref{fig:mesh_examples}. In $\mathcal{S}_m^d$
+(for both $d=2,3$) we use an alternating diagonal orientation across neighboring
+cells. Our experiments have shown that this alternating subdivision yields
+smaller approximation errors and faster convergence of
+all considered solvers than the non-alternating one. The alternation
+is chosen consistently for all~$m$, so that
+$\mathcal{S}_m^d\subseteq \mathcal{S}_{m+1}^d$ for $m\geq 0$. Moreover
+$\mathcal{C}_m^d \subseteq \mathcal{C}_{m + 1}^d$ and $\mathcal{C}_m^d \subseteq \mathcal{S}_m^d$
+for all $m\geq 0$.
+
+We always use $\mathcal{S}_m$ (for some $m\geq 0$) as the fine mesh $\mathcal{T}_h$, which gives
+$h=2^{-m}\sqrt{d}$. For any integers $0\leq \mathcal{M}\leq M \leq m$ we select
+the coarse and local solvers' meshes from the following combinations:
+\begin{itemize}
+  \item $\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$, $\mathcal{T}_H=\mathcal{S}_M$;
+  \item $\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$, $\mathcal{T}_H=\mathcal{S}_M$;
+  \item $\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$, $\mathcal{T}_H=\mathcal{C}_M$.
+\end{itemize}
+In all cases $\mathcal{T}_\mathcal{H}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h$ with
+$\mathcal{H}=2^{-\mathcal{M}}\sqrt{d}$ and $H=2^{-M}\sqrt{d}$. This choice
+of $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$ satisfies the regularity conditions
+of Theorems~\ref{thm:Przykry-asm} and~\ref{thm:two-meshes-asm}, as well as the
+assumption of an equal number of unknowns per local solver
+(see Section~\ref{sec:preconditioner-alg}).
+
+The code for the experiments is included in the \verb|experiments| package
+attached to this thesis.
+Both mesh generation and discretization are performed on a CPU using DOLFINx 0.9.0~\cite{dolfinx}.
+The resulting stiffness matrix $\bm{A}$ and load vector $\bm{f}$ from the discrete system
+\eqref{auf} are transferred to the GPU, which performs both the setup
+and the solution phase of the chosen solver. The computed solution of \eqref{auf}
+may finally be transferred back to the CPU for further processing. The resulting solution
+is always computed in double precision, but lower\nobreakdash-precision arithmetic
+might be used internally by the preconditioner according to the choice of
+its parameters (see Section~\ref{sec:solvers-overview}).
+
+The GPU we use to run all experiments in this chapter is an NVIDIA A100 80GB SXM.
+We use CUDA Events \cite[Section 6.2.8.8]{cuda-guide} to measure GPU timings.
+The general measurement procedure is as follows. We perform $N$ rounds, each
+consisting of $K$ consecutive runs of the measured phase and record the total
+time of each round independently. For each round we compute the per-run time
+as the round time divided by $K$, and we report the minimum per-run time over
+all rounds.
+
+Executing multiple rounds is necessary for several reasons. First, after
+idle periods the GPU requires a warm-up interval to reach its maximum frequency.
+Second, the initial run may be significantly slower due to just-in-time
+kernel compilation. Finally, individual runs can be slower because of external
+factors such as other users launching tasks on the same host. On the other hand,
+choosing $K>1$ is useful only when the measured function is very short
+(below roughly $10$\si{ms}), so that the measurement overhead is non-negligible
+and must be amortized by repeated execution. Accordingly, we use the following
+settings: $N=3$, $K=1$ for setup phases, $N=30$, $K=1$ for solve-time measurements,
+and $N=30$, $K=10$ when measuring a single execution of the ASM preconditioner
+or one of its constituent parts.
+
+\begin{figure}
+  \centering
+  \includesvg[width=0.7\textwidth]{mesh_examples}
+  \caption{Example experimental meshes and their refinement relationships for $d=2$:
+  ${\mathcal{S}_1\subseteq \mathcal{S}_2\subseteq \mathcal{S}_3}$ (left) and
+  $\mathcal{C}_1\subseteq \mathcal{C}_3\subseteq \mathcal{S}_3$ (right).}
+  \label{fig:mesh_examples}
+\end{figure}
+
+\subsection{Dependence on $h$, $H$, $\mathcal{H}$ and $p$}
+\label{sec:dependence-on-parameters}
+
+We begin by verifing the correctness of the implementation
+by reproducing the experiment from \cite{Przykry}, which studies
+the dependence of the condition number of the preconditioned ASM operator $\bm{T}$
+on the mesh parameters in the massively parallel setting $\mathcal{T}_H=\mathcal{T}_h$.
+For this test we set $d=2$, $p=1$, $\mathcal{T}_H=\mathcal{T}_h=\mathcal{S}_m$ and
+$\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$ for $4\leq \mathcal{M}\leq m\leq 11$.
+Note that this extends the original experiment, which considered only
+$4\leq \mathcal{M}\leq m\leq 7$.
+
+All computations were performed in double precision, using an LU decomposition
+as the local solver.
+We measure the number of PCG iterations required to reduce the initial Euclidean
+norm of the residual by a factor of $10^6$, and an estimate of the condition
+number of $\bm{T}$ obtained from the PCG coefficients (see \cite[Section 6.7.3]{Saad}).
+The corresponding solver configuration (cf. Section~\ref{sec:solvers-overview})
+is given in Listing~\ref{lst:cond-experiments-solver}. The right-hand side
+vector was generated by sampling uniformly from $[-1, 1]^{n}$ and normalizing
+to unit Euclidean norm. The initial guess was taken to be the zero vector.
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Solver used to estimate the condition number of the preconditioned ASM operator.},
+  label={lst:cond-experiments-solver},
+  style=Python
+]
+CG(
+  ASM(torch.float64, LU(), CUDSS()),
+  rtol=1e-6,
+  maxiter=2000,
+  bsr_matmul=False,
+  estimate_cond=True,
+)
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+Results are shown in Tables~\ref{tab:experiment-cond-h}
+and~\ref{tab:experiment-cond-h-iters}. For $4\leq \mathcal{M}\leq m\leq 7$
+the condition number estimates are close to those reported in \cite{Przykry},
+although our values are slightly smaller \nobreakdash-- possibly because we employ
+the exact form in the definition of the local solvers (see \eqref{T_i_def}).
+For larger $m$ the estimates remain consistent and exhibit the
+$O(\mathcal{H}^2/h^2)=O(2^{2m-2\mathcal{M}})$ behaviour, as predicted by
+Theorem~\ref{thm:Przykry-asm} for $H=h$. The iteration counts follow the asymptotic behaviour
+expected from Theorem~\ref{thm:pcg-convergence} given
+the condition number estimates.
+Surprisingly, our iteration counts are significantly
+larger than those reported in~\cite{Przykry}; we currently have no explanation
+for this discrepancy.
+
+% \begin{table}
+%   \centering
+%   \renewcommand{\arraystretch}{1.15}
+%   \caption{Dependence of the estimated condition number on the mesh parameters in the
+%   massively parallel case:
+%   $d=2$, $\mathcal{T}_H=\mathcal{T}_h=\mathcal{S}_m$ and
+% $\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$.}
+%   \label{tab:experiment-cond-h}
+%   \input{tables/experiment_cond_h.tex}
+% \end{table}
+
+% \begin{table}
+%   \centering
+%   \renewcommand{\arraystretch}{1.15}
+%   \caption{Dependence of the PCG iteration count on the mesh parameters in the
+%   massively parallel case:
+%   $d=2$, $\mathcal{T}_H=\mathcal{T}_h=\mathcal{S}_m$ and
+% $\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$.}
+%   \label{tab:experiment-cond-h-iters}
+%   \input{tables/experiment_cond_h_iters.tex}
+% \end{table}
+
+Next, we verify the dependence on the polynomial degree $p$.
+Again with $d=2$, we compare $p=1,2,...,12$ on the fixed mesh configuration:
+$\mathcal{T}_h=\mathcal{S}_3$ and $\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{C}_3$,
+using the same solver as above. The results are reported in Table~\ref{tab:experiment-cond-p}.
+They clearly indicate $O(p^2)$ behaviour of the condition number for fixed
+mesh parameters, which agrees with Theorem~\ref{thm:two-meshes-asm}, even
+though the coefficient $\rho$ is not constant.
+
+% \begin{table}
+%   \centering
+%   \renewcommand{\arraystretch}{1.15}
+%   \caption{Dependence of the PCG iteration count and estimated condition number
+%   on the polynomial degree $p$. Parameters: $d=2$, $\mathcal{T}_h=\mathcal{S}_3$ and
+%   $\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{C}_3$.}
+%   \label{tab:experiment-cond-p}
+%   \input{tables/experiment_cond_p.tex}
+% \end{table}
+
+\subsection{Exploiting Mixed Precision}
+\label{sec:precision-experiments}
+
+In this section we study the effectiveness of solving the linear system \eqref{auf}
+using \emph{mixed precision}: PCG iteration is executed in double precision
+to preserve accuracy, while the ASM preconditioner uses lower precisions internally
+to accelerate the computation. We test this approach on three discrete systems,
+obtained for $d=2$ and $(p, \mathcal{T}_h)\in \{(1, \mathcal{S}_{10}), (3, \mathcal{S}_9),
+(5, \mathcal{S}_8)\}$. For each case we take
+$\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}=\mathcal{S}_\mathcal{M}$ with
+$m-2\leq \mathcal{M}\leq m$.
+
+We use \verb|Inv| as the local solver, as it offers most flexibility for precision
+control. There are four possible configurations
+(Listing~\ref{lst:precision-experiments-solvers}): the entire ASM preconditioner
+in double precision (\verb|fp64|), in single precision (\verb|fp32|)
+and in single precision with the local solvers using 16-bit types
+(\verb|fp32+fp16| or \verb|fp32+bf16|).
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Solvers used in the mixed-precision experiments.},
+  label={lst:precision-experiments-solvers},
+  style=Python
+]
+CG(preconditioner, rtol=1e-9)
+for preconditioner in (
+  ASM(torch.float64, Inv(torch.float32), CUDSS()),   # fp64
+  ASM(torch.float32, Inv(torch.float32), CUDSS()),   # fp32
+  ASM(torch.float32, Inv(torch.float16), CUDSS()),   # fp32+fp16
+  ASM(torch.float32, Inv(torch.bfloat16), CUDSS()),  # fp32+bf16
+)
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+PCG iteration counts required to reduce the initial Euclidean norm of the
+residual by a~factor of $10^9$ are reported in
+Table~\ref{tab:experiment-precision-iters}. Using \verb|fp32|
+did not change the number of iterations except in one case ($p=5$, $m=8$, $M=\mathcal{M}=6$).
+The \verb|fp32+fp16| configuration added at most a few iterations for $p=3$ and $p=5$.
+We attribute such good behaviour of the \verb|fp32+fp16| variant to the fact that
+half precision is used only to store the inverses of the local solvers' matrices,
+while their application to batches of vectors is performed in single precision
+(see Section~\ref{sec:explicit-inverse-batch-solver}).
+
+% \begin{table}
+%   \centering
+%   \caption{Dependence of the PCG iteration count on the preconditioner precision settings.
+%   Parameters: $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
+%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$. Entries
+%   matching the double-precision results are in gray, extreme loss of
+%   convergence is highlighted in red.}
+%   \label{tab:experiment-precision-iters}
+%   \input{tables/experiment_precision_iterations.tex}
+% \end{table}
+
+By contrast, using \verb|fp32+bf16| significantly degrades convergence, requiring
+up to $2.5\times$ more iterations than \verb|fp64| in the extreme case $p=5$, $m=8$, $M=\mathcal{M}=6$.
+The comparison of the convergence behaviour for this scenario is shown in
+Figure~\ref{fig:precision-residuals}. While \verb|fp64|, \verb|fp32|
+and \verb|fp32+fp16| converge at the same steady rate, the \verb|fp32+bf16| run begins
+to slow when the residual norm reaches approximately $10^{-5}$ and eventually
+plateaus near $10^{-9}$.
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=0.65\textwidth]{precision_residuals}
+%   \caption{Euclidean norm of the residual at each PCG iteration for different
+%   preconditioner precision settings (selected case). Parameters:
+%   $d=2$, $p=5$, $\mathcal{T}_h=\mathcal{S}_8$ and
+%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_6$.}
+%   \label{fig:precision-residuals}
+% \end{figure}
+
+These findings are consistent with the timings reported in Figure~\ref{fig:precision-plots}.
+We measured not only the total solution time but also estimated the time spent
+in each ASM component by timing them independently and scaling by the number of
+PCG iterations. Local solvers benefit substantially from lower precision,
+with speedups of $1.75 - 1.96\times$ for \verb|fp32| and $2.62 - 3.40\times$ for
+\verb|fp32+fp16|, consistent with Section~\ref{sec:batched-dense-matrix-vector-product}.
+On the other hand, the time spent in the coarse \verb|CUDSS| solver is only marginally
+affected, showing speedups of $1.09 - 1.20\times$ when using \verb|float32| instead
+of \verb|float64|. This is expected since \verb|CUDSS| employs a sparse
+decomposition algorithm that relies on reading the integer indices of the
+nonzero entries, which are unaffected by floating-point precision changes.
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=\textwidth]{precision_plots}
+%   \caption{Comparison of the solution time, decomposed by component, for various
+%   problems and preconditioner precision settings. Parameters:
+%   $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
+%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$.}
+%   \label{fig:precision-plots}
+% \end{figure}
+
+The remainder of the ASM time -- application of the restriction and prolongation
+matrices $\bm{R_C}$ and $\bm{R_C}^T$, and summation of the solvers' contributions
+-- is also insensitive to the precision settings. There are two possible reasons
+for this. First, restriction and prolongation to the coarse space $V_C$ require
+reading integer index sequences $l_i$ and $\bar l_i$ that determine the nonzero
+structure of $\bm{R_C}$ and $\bm{R_C}^T$ (see Algorithm~\ref{preconditioner-M-pseudocode});
+these indices are not subject to precision reduction. Second, this part incurs
+type conversions when lower precisions are used, which reduce the attainable
+speedup.
+
+Finally, time spent outside the ASM preconditioner is essentially unaffected,
+as expected, since the remainder of the PCG iteration is always performed in
+double precision, and the modest increases in iteration counts have a negligible
+impact on this cost. The only exception is the \verb|fp32+bf16| case for $p=5$,
+discussed above.
+
+From these observations we conclude that the largest performance
+gains from using lower precisions may be achieved when the local solvers dominate
+the preconditioner cost, i.e., when the local problems are large and the coarse
+problem is small. Indeed, Figure~\ref{fig:precision-plots} shows that, for smaller
+$M=\mathcal{M}$ and larger $p$, the speedup in the total solution time obtained
+with \verb|fp32| and \verb|fp32+fp16| over \verb|fp64| increases.
+
+Overall, our measurements indicate that mixed precision is highly beneficial.
+With \verb|Inv| as the local solver, we observed speedups up to $1.44\times$
+for \verb|fp32| and $1.81\times$ for \verb|fp32+fp16|. The \verb|fp32+fp16| variant
+should, however, be used with caution. When the local problems are small, the
+additional reduction in local solvers' time offered by \verb|fp32+fp16| relative
+to \verb|fp32| may be insufficient to introduce a meaningful speedup in total solution time
+(this was observed for $\mathcal{M}=M=m$). Even though this was not observed here,
+\verb|fp32+fp16| may, in extreme cases, also cause a minor slowdown compared
+with \verb|fp32|, as we will see in Section~\ref{sec:experiments-parallelism}.
+The \verb|fp32+bf16| variant should be avoided, as it offers no performance
+benefit over \verb|fp32+fp16| and may severely degrade convergence.
+
+\subsection{Tuning Parallelism by Selecting $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$}
+\label{sec:experiments-parallelism}
+
+This section examines how the performance of the ASM solver depends on the choice
+of the coarse mesh $\mathcal{T}_\mathcal{H}$ and the local solvers' mesh $\mathcal{T}_H$.
+Our metric of interest is now total solution time rather than the
+iteration count considered in Section~\ref{sec:dependence-on-parameters}.
+
+We set $d=2$ and $p=1$ to maximize the amount of possible parallelism: the local solvers' matrices
+can be as small as $3\times 3$ when $\mathcal{T}_H=\mathcal{T}_h$. We fix
+$\mathcal{T}_h=\mathcal{S}_{11}$ as the fine mesh, which yields a discrete problem
+with roughly 25 million degrees of freedom. For the coarse mesh we consider
+$\mathcal{C}_\mathcal{M}$ and $\mathcal{S}_\mathcal{M}$ with $8\leq \mathcal{M}\leq 11$.
+For each choice of $\mathcal{T}_\mathcal{H}$ we evaluate all $\mathcal{T}_H$
+satisfying $\mathcal{T}_\mathcal{H}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h$,
+and being either $\mathcal{C}_M$ or $\mathcal{S}_M$ for some $M$.
+
+We test all available local solvers: \verb|Inv|, \verb|LU|, \verb|Cholesky| and
+\verb|BatchCUDSS|. In all cases we apply the preconditioner in single precision,
+as the previous section demonstrated its advantage over double precision.
+For \verb|Inv| we additionally evaluate the half-precision configuration
+\verb|fp32+fp16|. All timings report the time required to reduce the initial
+Euclidean norm of the residual by a~factor of $10^9$. Precise solver configurations
+are given in Listing~\ref{lst:solver-experiments-solvers}.
+
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Solvers used in the parallelism experiments.},
+  label={lst:solver-experiments-solvers},
+  style=Python
+]
+CG(ASM(torch.float32, local_solver, CUDSS()), rtol=1e-9)
+for local_solver in (
+  Inv(),
+  Inv(torch.float16),
+  LU(),
+  Cholesky(),
+  BatchCUDSS(),
+)
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+The comparison of solution times is shown in Figure~\ref{fig:solver-plots}.
+Following the approach from the previous section, we also estimated the time
+contribution of each ASM component. Missing entries correspond to
+a case when either some dense batch solvers failed because local
+problems were too large ($\mathcal{T}_H\in \{\mathcal{C}_8, \mathcal{S}_8\}$),
+or the sparse batch solver failed due to the excessive number of local problems
+($\mathcal{T}_H \in \{\mathcal{C}_{11}, \mathcal{S}_{11}\}$).
+We adopt \verb|Inv(float16)| as the reference local solver since it was the
+top variant in nearly all cases; exceptions occured for
+$\mathcal{T}_H\in \{\mathcal{C}_{11}, \mathcal{S}_{11}\}$, where single-precision
+\verb|Inv()| was marginally faster.
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=\textwidth]{solver_plots}
+%   \caption{Comparison of the \texttt{Inv(float16)} solution time, decomposed by component,
+%   for various $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$. Markers indicate
+%   the solution time when \texttt{Inv(float16)} is replaced by other local solvers.
+%   Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
+%   \label{fig:solver-plots}
+% \end{figure}
+
+The other dense batch solvers (\verb|LU| and \verb|Cholesky|) reported in
+Figure~\ref{fig:solver-plots} are noticeably
+slower than the direct inverse (note the logarithmic scale for times above 1\,s).
+This is expected since they are harder to parallelize effectively, moreover,
+we invested additional effort in optimizing \verb|Inv| relative to the baseline
+PyTorch implementation (see Section~\ref{sec:explicit-inverse-batch-solver}).
+Although \verb|LU| and \verb|Cholesky| offer faster setup times
+than \verb|Inv| for large local problems (Figure~\ref{fig:local-solver-setup-times}),
+their slower solve phase outweighs that benefit, even when only a single
+solve is performed per setup.
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=\textwidth]{local_solvers_setup_times}
+%   \caption{Setup time of the local solvers (including the construction of
+%   $\bm{A_0}, ..., \bm{A_{N_H-1}}$ from~$\bm{A}$) as a~function of $\mathcal{T}_H$
+%   for the dense batch solvers (left) and the sparse batch solver (right). Parameters:
+%   $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
+%   \label{fig:local-solver-setup-times}
+% \end{figure}
+
+The \verb|BatchCUDSS| solver performs poorly for small local problems,
+which is expected. Surprisingly, it only marginally outperforms \verb|LU()| even
+for $T_H=\mathcal{C}_8$, where the local solvers' matrices are $384\times 384$.
+Moreover, the setup times for \verb|BatchCUDSS| are two orders of magnitude larger
+than those of the dense batch solvers. \verb|BatchCUDSS| would definitely be
+preferable for larger local problems, when the dense batch solvers would exhaust
+GPU memory. However, we find it very unlikely to provide competitive solution
+time in these cases, given that its best performance among considered scenarios
+occured for $\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{C}_{10}$, and
+worsened as $\mathcal{T}_\mathcal{H}$ became coarser.
+
+The above observations indicate that the explicit inverse dense batch solver
+is the optimal choice for problems of the size considered here. We now compare
+its performance across different choices of $\mathcal{T}_\mathcal{H}$ and
+$\mathcal{T}_H$. When the coarse mesh is fixed and $\mathcal{M}\leq 9$,
+the best choice of $\mathcal{T}_H$ lies between $\mathcal{T}_\mathcal{H}$
+and $\mathcal{T}_h$, demonstrating the advantage of the three-grid ASM over
+the two-grid alternative. However, the best overall three-grid configuration
+($\mathcal{T}_\mathcal{H}=\mathcal{C}_9$, $\mathcal{T}_H=\mathcal{C}_{10}$)
+is only $1.08\times$ faster than the best overall two-grid variant
+($\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{S}_{9}$).
+This is because the coarse \verb|CUDSS| solver performs very well even
+for large $\mathcal{T}_\mathcal{H}$ (with reasonable setup times -- see
+Figure~\ref{fig:coarse-solver-setup-times}), and therefore it is optimal to choose
+$\mathcal{T}_\mathcal{H}$ close to $\mathcal{T}_h$, leaving little room for
+improvement by introducing an intermediate $\mathcal{T}_H$. We nevertheless
+expect the three-grid approach to offer greater potential on larger problems,
+where $\mathcal{T}_\mathcal{H}$ cannot be chosen near $\mathcal{T}_h$.
+Such problems, however, turned out to be difficult to handle on a single GPU due to memory
+constraints and were therefore left outside the scope of this thesis.
+
+% \begin{figure}
+%   \centering
+%   \includesvg[width=0.4\textwidth]{coarse_solver_setup_times}
+%   \caption{Setup time of the coarse solver (including the construction
+%   of $\bm{A_C}$ from~$\bm{A}$) as a~function of $\mathcal{T}_\mathcal{H}$.
+%   Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
+%   \label{fig:coarse-solver-setup-times}
+% \end{figure}
+
+\subsection{Comparison with AmgX}
+\label{sec:experiments-amgx-comparison}
+
+We conclude the experimental evaluation by comparing the performance
+of our ASM implementation with the algebraic multigrid preconditioners
+provided by NVIDIA AmgX (see Section~\ref{sec:amgx-preconditioner}).
+To ensure a fair comparison, we use our PCG implementation
+with each preconditioner and measure the total solution time required
+to reduce the initial Euclidean norm of the residual by a~factor of $10^9$.
+The ASM preconditioner is applied in single precision and tested only with
+\verb|Inv(float16)| and \verb|Inv()| as local solvers, in accordance with
+the results of the previous sections. Since AmgX also benefits from mixed
+precision, its preconditioners are applied in single precision as well.
+
+Results for several model problems with different $d$ and $p$ are reported
+in Table~\ref{tab:experiment-speedups}. Note that we use coarser $\mathcal{T}_h$
+for larger $p$ to make the problem fit in GPU memory. The problems are large
+enough that the direct \verb|CUDSS| solver fails during setup with out-of-memory
+errors in most cases; the sole exception is $d=2, p=1, \mathcal{T}_h=\mathcal{S}_{11}$,
+for which it performs extraordinarily well, with a solution time of $0.107$\,s
+after a $17$\,s setup. Note that when using a direct solver is
+applicable, it is expected to offer significantly better performance than
+an iterative method, as observed here.
+
+For each problem we list the best AmgX variant
+(from the candidates selected in Section~\ref{sec:amgx-preconditioner}),
+the best ASM configuration overall, and the best two-grid ASM variants (with
+$\mathcal{T}_\mathcal{H}=\mathcal{T}_H$ or $\mathcal{T}_\mathcal{H}=\mathcal{T}_h$).
+In all ASM cases the winning configurations used \verb|Inv(float16)|
+as the local solver. Note that AmgX solution times reported here are smaller than
+those in Section~\ref{sec:amgx-preconditioner}. We attribute this improvement to
+replacing the AmgX PCG implementation with our optimized version, which additionally
+permits applying the AMG preconditioner in single precision.
+
+\begin{table}
+  \centering
+
+  \caption{Best solution times obtained for selected model problems and speedups
+  relative to the reference AmgX preconditioner. All variants employ
+  \texttt{Inv(float16)} as the local solver.}
+  \label{tab:experiment-speedups}
+
+  \input{tables/experiment_speedups.tex}
+
+  % \bigskip
+
+  % \input{tables/experiment_speedups_2.tex}
+\end{table}
+
+For 2D problems, the elapsed time of the solve phase of our ASM implementation
+is slightly worse that that of AmgX.
+In contrast, for 3D problems the ASM preconditioner outperforms AmgX by a
+substantial margin, with speedups between $1.261$ and $1.771\times$.
+We emphasize that no further tuning of the example AmgX configurations
+was performed here; better performance may be possible by adjusting
+those parameters. Moreover, AmgX is a~general-purpose library, whereas our ASM
+implementation is specifically tailored to the model problem \eqref{div_eq}.
+On the other hand, AmgX is a highly optimized library developed by NVIDIA,
+while our implementation obviously has some room for further improvement.
+Therefore, we believe that the results are
+encouraging and demonstrate the potential of the ASM preconditioner
+from~\cite{Przykry}.
+
+From the experiments we observe that
+in all cases, optimal or near-optimal performance can be achieved by using
+two grids rather than three. This observation is consistent
+with Section~\ref{sec:experiments-parallelism}, where we found that for the
+problem sizes considered it is optimal to choose $\mathcal{T}_\mathcal{H}$
+close to $\mathcal{T}_h$, leaving little room for improvement from an
+intermediate mesh. However, it is interesting to note that the classical choice
+$\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}$ performed poorly in two test cases
+($d=3$, $p\in \{1, 2\}$), while the massively parallel approach
+$\mathcal{T}_H=\mathcal{T}_h$ delivered timings close to the best ASM configurations
+considered across all tested problems.
+
+\section{Conclusions}
+
+The subject of this thesis is the Additive Schwarz Method (ASM) preconditioner
+from \cite{Przykry} for the model elliptic problem \eqref{div_eq}. We adapted
+the original method to employ exact local solvers and to support higher-degree
+finite elements, and we presented in detail an algorithmic realization
+tailored for highly parallel architectures. The objective of the thesis
+was to provide an efficient single\nobreakdash-GPU implementation of this method and
+to evaluate its performance across a range of parameters, comparing the
+best results with the algebraic multigrid solvers from the NVIDIA AmgX library.
+
+Our implementation uses the PyTorch framework with
+several targeted optimizations
+that may be of independent interest. These include a~custom batched dense
+matrix-vector product kernel (which is $10-60\times$ faster than the PyTorch
+baseline for small matrix sizes) and a BSR matrix-vector product algorithm
+that outperforms cuSPARSE by up to $4.76\times$ for small block sizes.
+
+The experiments confirmed the expected convergence behaviour of the preconditioned
+ASM operator in the setting of higher-degree elements. They also showed that
+appropriately chosen mixed-precision
+configuration have a negligible impact on convergence rate
+while providing speedups in the total solution time of
+up to $1.81\times$ relative to double precision.
+
+A parameter study revealed that for the fixed coarse mesh the best performance
+is achieved for small or moderate local problems, which can be solved efficiently
+using the explicit inverse dense batch solver. The three-grid
+variant can offer advantages over the two\nobreakdash-grid approach, particularly
+when the coarse mesh is substantially coarser than the fine mesh.
+However, for problems that fit on a~single GPU it is optimal to choose the coarse
+mesh as close as possible to the fine one, leaving
+little room for improvement by an intermediate mesh. We therefore expect the
+three\nobreakdash-grid method to be more beneficial for larger problems
+that do not fit on a~single GPU.
+
+Comparison with NVIDIA AmgX demonstrates that our ASM implementation is competitive:
+timings are comparable for 2D problems, while our method yields speedups up to $1.78\times$
+over AmgX for 3D problems. These findings attest to the potential of the considered ASM
+preconditioner and motivate further research in its highly parallel realizations.
+
+We identify several directions for future experimental work. First, the
+implementation can be further optimized by replacing PyTorch-level components
+with custom CUDA kernels. Second, given the effectiveness of mixed precision,
+investigating inexact \emph{coarse} solvers seems a promising avenue.
+Third, extending the approach to multi-GPU setting \cite{Yamazaki} would enable larger problem
+sizes and is expected to better exploit the potential of the three-grid method.
+
+\printbibliography
+
+\end{document}
+
+
+%%% Local Variables:
+%%% mode: latex
+%%% TeX-master: t
+%%% coding: latin-2
+%%% End:
