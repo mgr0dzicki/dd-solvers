@@ -156,7 +156,8 @@ orchestration. Second, we implement the three-grid ASM~\cite{Przykry, Przykry-hp
 which, to our knowledge, has not been ported to a GPU before. This allows
 us to consider highly parallel variants with millions of small subdomains,
 processing all of them simultaneously within a single GPU kernel; this design seems
-better suited to the GPU architecture \cite{cuda-guide}.
+better suited to the GPU architecture \cite{cuda-guide}.\todo{coś o gpu vs cpu?}
+\todo{coś o pytorchu?}
 
 We assume that the linear system $\bm{A} \bm{u^*} = \bm{f}$, resulting from the
 DG discretization of~\eqref{div_eq}, has already been assembled and is provided.
@@ -720,148 +721,35 @@ the beginning of \textit{M\_{hyb}\_{loc}}, saving computational time.
 \section{Implementation}
 \label{chap:implementation}
 
-This chapter describes our GPU implementation of the ASM solver for the linear
+This section describes our GPU implementation of the domain decomposition
+solver for the linear
 system~\eqref{auf}. The implementation targets NVIDIA GPUs with compute capability 8.0 or
 higher, but we expect that the conclusions we draw from its evaluation
-in Chapter~\ref{chap:experiments} generalize to other highly parallel architectures.
-
-The code is included in the \texttt{dd\_solvers} package
-attached to this thesis. It addition to the ASM solver itself, it
-provides solvers suitable for its coarse and local components, as well as
-other methods used for preprocessing and performance comparison.
-
-We begin by outlining the implementation environment in
-Section~\ref{sec:hardware-and-software}, then review the dependencies
-among the project's components in Section~\ref{sec:solvers-overview}.
-Sections~\ref{sec:asm-preconditioner} and~\ref{sec:explicit-inverse-batch-solver}
-detail the implementations of the ASM preconditioner and one of the possible
-choices for its local component -- the explicit inverse batch solver. Next,
-Section~\ref{sec:cg-method} presents an optimized implementation of the
-(Preconditioned) CG method. Finally, Section~\ref{sec:amgx-preconditioner}
-describes the configuration of the AmgX solver, which serves as our performance
-baseline.
-
-\subsection{Hardware and Software Stack}
-\label{sec:hardware-and-software}
+generalize to other highly parallel architectures.
 
 The presented solver is implemented in Python 3 and relies on the PyTorch 2
 framework~\cite{pytorch,pytorch2} for GPU-accelerated linear algebra operations.
-If PyTorch operations prove insufficient, we implement custom CUDA kernels.
-Below we briefly summarize the CUDA programming model and highlight the
-aspects of PyTorch that are most relevant to our implementation.
-
-\subsubsection{CUDA Programming Model}
-\label{sec:gpu-programming-model}
-
-The architecture of Graphics Processing Unit (GPU) differs substantially from
-that of Central Processing Unit (CPU). While the CPU is designed to
-efficiently execute a sequence of operations, called a \emph{thread},
-and can run at most tens of complex threads concurrently, the GPU is optimized for
-executing thousands of threads in parallel, each performing a relatively
-simple task (see Figure~\ref{fig:gpu-vs-cpu}).
-Therefore to exploit the GPU's peak instruction throughput
-and memory bandwidth, which can exceed those of the CPU by orders of magnitude
-for comparable hardware cost, one needs algorithms that are \emph{massively parallel}:
-able to split the work into thousands or even millions of inexpensive, independent tasks
-\cite[Chapter~3]{cuda-guide}.
-
-% \begin{figure}
-%   \centering
-%   \includegraphics[width=0.8\textwidth]{gpu_vs_cpu}
-%   \caption{Comparison of CPU and GPU architectures. Individual \emph{cores} are
-%     single-threaded units; accesses to the global memory (\emph{DRAM})
-%     are buffered in smaller, but much faster \emph{caches}. The GPU
-%     devotes more transistors to data processing rather than data caching and
-%     control logic. Source: \cite[Figure 1]{cuda-guide}.}
-%   \label{fig:gpu-vs-cpu}
-% \end{figure}
-
-Because our implementation targets NVIDIA hardware, it follows the CUDA
-programming model \cite[Chapter 5]{cuda-guide}. In CUDA
-the basic unit of execution is a \emph{kernel}: a function
-executed in parallel by many GPU threads. Kernels are typically launched from
-the CPU and execute asynchronously, allowing the CPU to launch kernels
-without waiting for each to finish and thus keeping the GPU busy.
-The GPU is usually equipped with its own, high-bandwidth memory; data must be
-explicitly copied from the CPU to the GPU to be accessible to kernels,
-and vice versa. The typical workflow therefore consists of copying input data to the GPU,
-launching a series of kernels to process it, and finally copying the results back
-to the CPU.
-
-Each kernel contains code executed by a single GPU thread; these threads form blocks and blocks
-form a~grid. For the programmer's convenience, this grid
-might be indexed with one-, two- or three-dimensional coordinates. Because we use
-a one-dimensional distribution of work (such as one matrix
-row per thread) in all parallel algorithms presented in
-this work, our kernels naturally employ 1D grids and blocks. In the
-pseudocode, we use $thread\_global\_idx$ to denote the unique index of a
-thread in the grid, which in the CUDA model is expressed as
-\[
-  thread\_global\_idx = blockI\hspace{-1pt}dx.x \cdot blockDim.x + threadI\hspace{-1pt}dx.x,
-\]
-where $blockI\hspace{-1pt}dx$, $blockDim$ and $threadI\hspace{-1pt}dx$ denote
-the coordinates of the block in the grid, the dimensions of the block and the coordinates
-of the thread within the block, respectively.
-
-The native language for writing CUDA kernels is C++ with some extensions,
-commonly referred to as CUDA C++ \cite[Chapter 6]{cuda-guide}. We use it to
+This makes the implementation concise, free from memory management issues
+and transportable across different hardware platforms supported by PyTorch.
+Only when PyTorch operations prove insufficient, we implement custom CUDA kernels.
+We use CUDA C++ \cite[Chapter 6]{cuda-guide} to
 implement the batched dense matrix\nobreakdash-vector product
 (see Section~\ref{sec:batched-dense-matrix-vector-product}),
 since it requires careful handling of type casting and direct calls to
 half-precision intrinsics. The majority of our kernels, however, are less low-level
 and are therefore written in a subset of Python supported by the CUDA target
 of a just-in-time compiler for Python -- Numba \cite{numba}.
-This choice simplifies integration with the PyTorch framework,
-which is used to implement the large part of the solver.
-Moreover, static parameters of the kernels,
-such as data types or the BSR block size, do
-need to be specified in advance, but can be inferred from the input tensors.
+This choice simplifies integration with PyTorch.
+Moreover, static parameters of the kernels, such as data types or the BSR block size,
+need not be specified in advance, but can be inferred from the input tensors.
 Kernels are compiled on first invocation and then cached for all subsequent calls.
 
-\subsubsection{PyTorch}
-\label{sec:pytorch}
+The complete code is included in the \texttt{dd\_solvers} package
+available on GitHub [???]. It was tested on the NVIDIA Docker container tagged as
+\texttt{nvcr.io/nvidia/pytorch:24.12-py3} \cite{pytorch-ngc}, which includes
+Python 3.12.3, PyTorch 2.6.0 and NVIDIA CUDA 12.6.3. All additional solver
+dependencies are specified in the accompanying \texttt{Dockerfile}.
 
-PyTorch 2 \cite{pytorch,pytorch2} offers a convenient interface for
-linear algebra operations on both dense and sparse matrices and supports
-a variety of hardware backends, including CPUs, GPUs and TPUs. In particular,
-it can efficiently delegate certain operations to NVIDIA
-CUDA libraries, such as cuBLAS \cite{cublas} and cuSPARSE \cite{cusparse},
-which are highly optimized for NVIDIA GPUs. This makes PyTorch a suitable
-choice for our needs, even though it is primarily designed
-for applications in machine learning.
-
-Installing PyTorch with all dependencies required for optimal performance
-can be a complicated process and therefore it is recommended to use
-the official Docker container images released by NVIDIA \cite{pytorch-ngc}.
-The code presented in this work was tested on the container tagged as
-\texttt{nvcr.io/nvidia/pytorch:24.12-py3}, which includes Python 3.12.3,
-PyTorch 2.6.0 and NVIDIA CUDA 12.6.3. All additional solver dependencies
-are specified in the accompanying \texttt{Dockerfile}.
-
-The basic data structure in PyTorch is a \emph{tensor}, which is a
-multidimensional array with an associated data type. The tuple of its
-dimensions is usually referred to as its \emph{shape}. For example, a tensor
-of shape $(m, k, k)$ is a three-dimensional array that can be viewed as a~batch
-of $m$ square matrices of size $k\times k$, whereas a tensor
-of shape $(m,)$ is a one-dimensional vector of length $m$.
-
-PyTorch also supports a variety of sparse formats
-designed to efficiently store tensors with a large number of zero elements.
-The described solver operates on two of them:
-\emph{Compressed Sparse Row} (CSR) and \emph{Block Sparse Row} (BSR).
-For a detailed description of these formats,
-see \cite[Section 3.3]{cusparse}.
-
-By default, PyTorch performs tensor operations \emph{eagerly}, executing them
-immediately and often creating extraneous intermediate tensors, which may lead
-to significant performance degradation (see Sections~\ref{sec:preconditioner-solve}
-and \ref{sec:fused-operations} for some examples).
-PyTorch 2 addresses this issue via TorchDynamo and TorchInductor~\cite{pytorch2}.
-TorchDynamo analyses Python code, bulding a~computation graph, which is then
-just-in-time compiled by one of the available backends, TorchInductor being the
-default one. Utilizing these tools is as simple as
-extracting the code to be optimized into a function and decorating it with
-\verb|torch.compile|, see, e.g., Section~\ref{sec:preconditioner-solve}.
 
 \subsection{Solvers Overview}
 \label{sec:solvers-overview}
