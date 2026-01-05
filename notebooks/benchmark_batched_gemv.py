@@ -17,13 +17,16 @@ def mul_custom(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 MAX_ELEMENTS = 2**26
 
-ks = range(2, 130)
+# ks = range(2, 130)
+ks = range(80, 130)
 results = []
 
 for k in tqdm.tqdm(ks):
     n = MAX_ELEMENTS // (k * k)
-    for b_dtype in [torch.float32, torch.float64]:
-        for A_dtype in [torch.float32, torch.float64, torch.float16, torch.bfloat16]:
+    # for b_dtype in [torch.float32, torch.float64]:
+    for b_dtype in [torch.float64]:
+        # for A_dtype in [torch.float32, torch.float64, torch.float16, torch.bfloat16]:
+        for A_dtype in [torch.float16]:
             if A_dtype is torch.float64 and b_dtype is torch.float32:
                 continue  # skip unsupported combo
 

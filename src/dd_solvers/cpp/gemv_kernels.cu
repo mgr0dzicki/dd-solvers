@@ -98,12 +98,12 @@ __global__ void gemvStridedBatchedDoubleHalfKernel(
 
   const __half* matBase = mat + (size_t)batch * (size_t)k * (size_t)k;
   const double* vecBase = vec + (size_t)batch * (size_t)k;
-  double acc = 0.0f;
+  float acc = 0.0f;
 
   for (int c = 0; c < k; c++) {
     __half m = (matBase + (size_t)c * (size_t)k)[row];
-    double mf = static_cast<double>(__half2float(m));
-    double vf = vecBase[c];
+    float mf = __half2float(m);
+    float vf = vecBase[c];
     acc += mf * vf;
   }
 
