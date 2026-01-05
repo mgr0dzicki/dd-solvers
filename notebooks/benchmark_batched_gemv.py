@@ -65,4 +65,4 @@ for k in tqdm.tqdm(ks):
                 )
 
 df = pd.DataFrame(results)
-df.to_csv("../results/batched_gemv_benchmark.csv", index=False)
+df.to_csv("../results/benchmark_batched_gemv.csv", index=False)
