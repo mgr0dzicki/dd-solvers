@@ -980,9 +980,9 @@ fine elements to solver subdomains, and from solver subdomains to coarse element
 \subsection{Explicit Inverse Batch Solver}
 \label{sec:explicit-inverse-batch-solver}
 
-Using the explicit inverse as a local solver in the ASM preconditioner
+Using the explicit inverse as a local solver in the Schwarz preconditioners
 may appear counterintuitive, since it may have worse numerical properties and requires a more
-expensive setup than standard solvers based on factorizations such as LU or Cholesky \cite{Higham}.
+expensive setup than standard solvers based on factorizations such as LU or Cholesky.
 Nevertheless, multiplication by the inverse exposes more parallelism than
 a triangular solve, as all elements of the output vector can be computed
 independently, which is particularly beneficial for highly\nobreakdash-parallel architectures
@@ -997,7 +997,7 @@ three-dimensional tensors of shape $(N_H, k, k)$, where $k$ is the number of
 unknowns per solver.
 
 The solution phase reduces to computing the batched product (cf.
-Algorithm~\ref{preconditioner-M-pseudocode}, lines~9--11)
+Algorithm~\ref{preconditioner-M-pseudocode}, line~4)
 \[
   \bm{y^{(i)}}\gets \bm{A_i}^{-1}\bm{x^{(i)}},\quad i=0,...,N_H-1,
 \]
@@ -1015,7 +1015,7 @@ downcasting of the stored inverse matrices to lower precision, which can
 improve the performance of the solution phase. Regardless of the internal
 storage precision of the inverses, the output vectors $\bm{y^{(i)}}$ produced
 by the solver always has the same precision as the input vectors $\bm{x^{(i)}}$ (as dictated by
-the ASM preconditioner), which may be either double (\verb|float64|) or
+the preconditioner), which may be either double (\verb|float64|) or
 single (\verb|float32|).
 
 \subsubsection{Batched Dense Matrix-Vector Product}
@@ -1055,31 +1055,13 @@ Even if they were not, no additional steps would be required, because the matric
   $y[b, r] \gets acc$
 \end{algorithm}
 
-Many combinations of $mat$, $x$, and $y$ are possible, but with the local solvers
-use case in mind, we implemented four variants, listed in Table~\ref{tab:gemv-precisions}.
-If the matrices $mat$ are stored in a 16-bit precision (\verb|float16| or \verb|bfloat16|),
-their elements are converted to single precision immediately after being
+The matrices $mat$ may be stored in precision lower than that of vectors $x$ and $y$.
+In such case each matrix element is upcast after being
 fetched from memory (line 9). Thus multiplication
 and accumulation are always performed in the precision of vectors $x$ and $y$.
 Because these are only two floating\nobreakdash-point operations per element read from $mat$,
 the algorithm is memory-bound and reducing computation precision does not
 improve performance, which our experiments confirm.
-
-\begin{table}
-  \centering
-  \caption{Implemented variants of Algorithm \ref{alg:batched-mat-vec}.}
-  \label{tab:gemv-precisions}
-  \begin{tabular}{ccccc}
-    \toprule
-    $mat$ & $\times$ & $x$ & $=$ & $y$\\
-    \midrule
-    \verb|float64| & $\times$ & \verb|float64| & $=$ & \verb|float64|\\
-    \verb|float32| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
-    \verb|float16| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
-    \verb|bfloat16| & $\times$ &  \verb|float32| & $=$ & \verb|float32|\\
-    \bottomrule
-  \end{tabular}
-\end{table}
 
 As is usual for memory-bound operations, we measure the kernel performance
 in terms of achieved memory throughput, calculated
