@@ -777,7 +777,7 @@ The specific actions of $\bm{M_{add}}$ and $\bm{M_{hyb}^{loc}}$
 (Algorithms~\ref{preconditioner-M-pseudocode} and~\ref{preconditioner-M-hyb-pseudocode})
 are implemented in \texttt{AdditiveSchwarz} and \texttt{HybridSchwarz} classes, respectively;
 both derive from \texttt{SchwarzOperator}. The details are discussed
-in Section~\ref{sec:asm-preconditioner}.
+in Section~\ref{sec:schwarz-preconditioners}.
 Schwarz operators are parametrized by
 the choice of coarse and local solvers: the coarse solver must subclass
 \texttt{SparseSolver}, while the local solver
@@ -874,25 +874,98 @@ s5 = CG(AdditiveSchwarz(
 \end{algorithm}
 
 
-\subsection{ASM Preconditioner}
-\label{sec:asm-preconditioner}
+\subsection{Schwarz Preconditioners}
+\label{sec:schwarz-preconditioners}
 
-We now describe the implementation of the ASM preconditioner,
-outlined in Algorithms~\ref{preconditioner-setup-pseudocode}
-and~\ref{preconditioner-M-pseudocode}.
-The setup phase (see Algorithm~\ref{preconditioner-setup-pseudocode})
-begins with constructing the coarse and local solvers' matrices, as detailed in Sections
-\ref{sec:local-solvers-assembly} and \ref{sec:coarse-solver-assembly}. Next,
-the coarse and local solvers are initialized using their \texttt{setup} methods.
+The implementation of the additive and hybrid Schwarz preconditioners
+follows Algorithms~\ref{preconditioner-setup-pseudocode}--\ref{preconditioner-M-hyb-pseudocode}.
+We focus on the scenario where the solver is first initialized with
+the system matrix $\bm{A}$ and the parameters $k$ and
+$l=(l_0, ..., l_{N_{\mathcal{H}-1}})$, and then used to solve
+a large number of systems with the same matrix $\bm{A}$ but different right-hand sides.
+Consequently, we focus on describing the application of the preconditioners to
+a vector. This operation is a part of the solution phase, and therefore constitutes
+our optimization target. The implementation of the setup phase is a~straightforward
+realization of Algorithm~\ref{preconditioner-setup-pseudocode} and is not
+discussed further.
 
-The multiplication by $\bm{M}$ (see Algorithm~\ref{preconditioner-M-pseudocode})
--- which can be interpreted as an approximate solution of a system with $\bm{A}$
--- is implemented in the \texttt{solve} method of the \texttt{ASM}
-class. Once the preconditioner is set up, it can be applied repeatedly to
-different right-hand sides. Implementation details are provided in
-Section~\ref{sec:preconditioner-solve}.
+Thanks to the usage of high-level linear algebra operations provided by PyTorch,
+the implementation of applying either preconditioner to a vector is concise enough
+to be included here in its entirety. We present and discuss the implementation
+of the additive Schwarz preconditioner (Listing~\ref{lst:preconditioner-solve}) in detail;
+the hybrid Schwarz preconditioner is implemented similarly.
 
-Note that the ASM preconditioner requires a specific ordering of the unknowns,
+\begin{algorithm}
+\vspace{-3pt}
+\begin{lstlisting}[
+  caption={Implementation of preconditioner's multiplication by a vector.},
+  label={lst:preconditioner-solve},
+  style=Python
+]
+@torch.compile
+def solve(self, x: torch.Tensor) -> torch.Tensor:          # $x\mapsto M_{add}x$
+  x_lower_precision = x.to(self.preconditioner_precision or x.dtype)
+  x_i = x_lower_precision.reshape(self.n_solvers, -1)      # $x^{(i)} \gets R_i x$
+  y_i = self.local_solvers.solve(x_i)                   # $y^{(i)} \gets A_i^{-1} x^{(i)}$
+  y = y_i.flatten()                       # $\hspace{3pt} y \gets R_0^T y^{(0)} + ... + R_{N_H-1}^T y^{(N_H-1)}$
+  x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+  x_c = torch.segment_reduce(                             # $x^C \gets R_C x$
+    x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
+  )
+  y_c = self.coarse_solver.solve(x_c)                    # $y^C \gets A_C^{-1} x^C$
+  y_solvers = y_c.repeat_interleave(
+    self.solvers_per_coarse, output_size=self.n_solvers
+  )
+  y += y_solvers.repeat_interleave(                       # $y\ +\!= R_C^T y^C$
+    self.dofs_per_solver, output_size=y.shape[0]
+  )
+  return y.to(x.dtype)
+\end{lstlisting}
+\vspace{-3pt}
+\end{algorithm}
+
+First, in line 3,
+the $n$-element input vector $x$ is converted to lower precision if it is enabled
+in the preconditioner configuration. The following lines 4--6 correspond to
+lines 2--6 of Algorithm~\ref{preconditioner-M-pseudocode}. Since
+vectors $x^{(i)}$ comprise blocks of $k$ consecutive elements of $x$, their
+batched representation \verb|x_i| is obtained by simply \emph{reshaping}
+the tensor $x$. In other words, \verb|x_i| shares memory with \verb|x_lower_precision|
+and only indexes it differently; therefore no GPU computation is invoked in this step.
+The local solvers are then executed in parallel to compute the batch of
+vectors $y^{(i)}$, which is finally flattened to yield the intermediate result $y$.
+Again, flattening does not involve any computation, as \verb|y| shares memory with \verb|y_i|.
+
+The next step is to compute the vector $x^C=R_C x$ (cf.
+Algorithm~\ref{preconditioner-M-pseudocode}, lines 7\nobreakdash--9).
+Since this step sums consecutive blocks of
+$kl_0, ..., kl_{N_H-1}$ elements of $x$, it can be split into two stages.
+First, consecutive blocks of
+$k$ elements of $x$ are summed (line 7) to form \verb|x_solvers| of
+shape $(N_H,)$. Then, consecutive blocks of $l_0, ..., l_{N_H-1}$ elements of
+\verb|x_solvers| are summed (lines 8--10) to produce \verb|x_c| of shape
+$(N_{\mathcal{H}}, )$. The tensor \verb|solvers_per_coarse_scan| passed to the
+\verb|segment_reduce| function should contain the cumulative sums
+$\bar l_0, ..., \bar l_{N_{\mathcal{H}}-1}$ defined in \eqref{bar_l_i_def}.
+Such two-stage reduction leverages the regularity of the step involving the
+largest number of elements and was found to be more efficient than a single
+reduction over the entire $x$. Note that this optimization relies on the
+assumption of a constant number of unknowns per solver
+(see Section~\ref{sec:preconditioner-alg}).
+
+Then in line 11, the coarse solver is invoked to compute $y^C=A_C^{-1} x^C$.
+Next, lines 12--17 compute $z=R_C^T y^C$ (cf. Algorithm~\ref{preconditioner-M-pseudocode}, line 15)
+and add it to $y$ to yield the final result $y+z$.
+Similar to the reduction of $x$ to $x^C$, this uses a two-step construction
+that we found to be more efficient than a single scatter operation.
+The result is finally converted back to the original precision in line 18.
+
+The entire method is decorated with \verb|torch.compile|, which fuses compatible
+operations into a~single kernel \cite{pytorch2}. For example, downcasting in line 3 and
+summation in line 7 are combined to eliminate a redundant read of
+\verb|x_lower_precision|\todo{czy to nadal jest prawda jak zmienilem kolejnosc?}.
+
+Note that the preconditioners require a specific ordering of the unknowns,
 as described in Section~\ref{sec:preconditioner-alg}. If this ordering cannot be
 imposed during the discretization phase (which should be the preferred and
 inexpensive approach for production use),
@@ -903,94 +976,6 @@ after a call to \verb|solve|. For such an occasion,
 the \verb|dd_solvers| package supplies utility functions that perform these permutations
 efficiently, given the three mappings: from fine elements to unknowns, from
 fine elements to solver subdomains, and from solver subdomains to coarse elements.
-
-\subsubsection{Multiplication by a Vector}
-\label{sec:preconditioner-solve}
-
-The implementation of computing the preconditioner's action on a vector
-is concise enough to appear in its entirety in Listing~\ref{lst:preconditioner-solve}.
-Only metadata handling is omitted for clarity.
-
-\begin{algorithm}
-\vspace{-3pt}
-\begin{lstlisting}[
-  caption={Implementation of preconditioner's multiplication by a vector.},
-  label={lst:preconditioner-solve},
-  style=Python
-]
-@torch.compile
-def solve(self, x: torch.Tensor) -> torch.Tensor:                # $x\mapsto Mx$
-  x_lower_precision = x.to(self.preconditioner_precision or x.dtype)
-  x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-  x_c = torch.segment_reduce(                                  # $x^C \gets R_C x$
-    x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
-  )
-  x_i = x_lower_precision.reshape(self.n_solvers, -1)          # $x^{(i)} \gets R_i x$
-  y_c = self.coarse_solver.solve(x_c)                        # $y^C \gets A_C^{-1} x^C$
-  y_i = self.local_solvers.solve(x_i)                       # $y^{(i)} \gets A_i^{-1} x^{(i)}$
-  y = y_i.flatten()                           # $\hspace{3pt} y \gets R_0^T y^{(0)} + ... + R_{N_H-1}^T y^{(N_H-1)}$
-  y_solvers = y_c.repeat_interleave(
-    self.solvers_per_coarse, output_size=self.n_solvers
-  )
-  y += y_solvers.repeat_interleave(                          # $\hspace{4pt} y\ +\!= R_C^T y^C$
-    self.dofs_per_solver, output_size=y.shape[0]
-  )
-  return y.to(x.dtype)
-\end{lstlisting}
-\vspace{-3pt}
-\end{algorithm}
-
-
-First, the $n$-element input vector $x$ is converted to lower precision if it is enabled
-in the preconditioner configuration. Next, the vector $x^C=R_C x$ (cf.
-Algorithm~\ref{preconditioner-M-pseudocode}, lines 2\nobreakdash--4) is computed and stored
-in the tensor \verb|x_c|. Since this step sums consecutive blocks of
-$kl_0, ..., kl_{N_H-1}$ elements of $x$, it can be split into two stages.
-First, consecutive blocks of
-$k$ elements of $x$ are summed (line 4) to form \verb|x_solvers| of
-shape $(N_H,)$. Then, consecutive blocks of $l_0, ..., l_{N_H-1}$ elements of
-\verb|x_solvers| are summed (lines 5--7) to produce \verb|x_c| of shape
-$(N_{\mathcal{H}}, )$. The tensor \verb|solvers_per_coarse_scan| passed to the
-\verb|segment_reduce| function should contain the cumulative sums
-$\bar l_0, ..., \bar l_{N_{\mathcal{H}}-1}$ defined in \eqref{bar_l_i_def}.
-Such two-stage reduction leverages the regularity of the step involving the
-largest number of elements and was found to be more efficient than a single
-reduction over the entire $x$. Note that this optimization relies on the
-assumption of a constant number of unknowns per solver
-(see Section~\ref{sec:preconditioner-alg}).
-
-Then, the two-dimensional tensor \verb|x_i| of shape $(N_H, k)$ is defined to
-represent the batch of vectors $x^{(i)}=R_i x$
-(cf. Algorithm~\ref{preconditioner-M-pseudocode}, lines 5--7). Since
-vectors $x^{(i)}$ comprise blocks of $k$ consecutive elements of $x$, their
-batched representation is obtained by simply \emph{reshaping}
-the tensor $x$. In other words, \verb|x_i| shares memory with
-\verb|x_lower_precision| and only indexes it differently; therefore no
-GPU computation is invoked in this step.
-
-Once \verb|x_c| and \verb|x_i| are available, the coarse and local
-solvers are invoked in lines 8--11 (cf. Algorithm~\ref{preconditioner-M-pseudocode},
-lines 8--11). The batch of outputs $y^{(i)}$ is
-\emph{flattened} to form the vector $y$ of shape $(n, )$ in line 11
-(cf. Algorithm~\ref{preconditioner-M-pseudocode}, lines 12--14). Again, this
-requires no additional GPU computation, as flattening only changes the
-interpretation of the indices.
-
-Lines 12--17 compute $z=R_C^T y^C$ (cf. Algorithm~\ref{preconditioner-M-pseudocode}, line 15)
-and add it to $y$ to yield the final result $y+z$.
-Similarly to the reduction of $x$ to $x^C$, this uses a two-step construction
-that we found to be more efficient than a single scatter operation.
-First, the tensor \verb|y_solvers| of shape $(N_H,)$ is
-constructed from \verb|y_c| by repeating the $i$-th element $l_i$ times. Then,
-each element of \verb|y_solvers| is added to $k$ consecutive elements of
-\verb|y|, yielding $y+z$.
-The result is finally converted back to the original precision in line 18.
-
-The entire method is decorated with \verb|torch.compile|
-(see Section~\ref{sec:pytorch}), which fuses compatible
-operations into a~single kernel. For example, downcasting in line 3 and
-summation in line 4 are combined to eliminate a redundant read of
-\verb|x_lower_precision|.
 
 \subsection{Explicit Inverse Batch Solver}
 \label{sec:explicit-inverse-batch-solver}
