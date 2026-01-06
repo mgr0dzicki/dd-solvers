@@ -28,6 +28,41 @@ __global__ void gemvStridedBatchedFloatBf16Kernel(
   out[(size_t)batch * (size_t)k + (size_t)row] = acc;
 }
 
+__global__ void gemvStridedBatchedFloatHalfKernelShared(
+    const __half* __restrict__ mat,  // shape: (n, k, k) column-major
+    const float* __restrict__ vec,   // shape: (n, k)
+    float* __restrict__ out,         // shape: (n, k)
+    int n,
+    int k) {
+  const int blockSize = blockDim.x;
+  const int batchPerBlock = blockSize / k;
+
+  const int localBatch = threadIdx.x / k;
+  if (localBatch >= batchPerBlock)
+    return;
+  const int batch = blockIdx.x * batchPerBlock + localBatch;
+  const int row = threadIdx.x % k;
+  if (batch >= n)
+    return;
+
+  const __half* matBase = mat + (size_t)batch * (size_t)k * (size_t)k;
+  const float* vecBase = vec + (size_t)batch * (size_t)k;
+  float acc = 0.0f;
+
+  extern __shared__ float vecSharedF[];
+  vecSharedF[threadIdx.x] = vecBase[row];
+  __syncthreads();
+
+  for (int c = 0; c < k; c++) {
+    __half m = (matBase + (size_t)c * (size_t)k)[row];
+    float mf = __half2float(m);
+    float vf = vecSharedF[localBatch * k + c];
+    acc += mf * vf;
+  }
+
+  out[(size_t)batch * (size_t)k + (size_t)row] = acc;
+}
+
 __global__ void gemvStridedBatchedFloatHalfKernel(
     const __half* __restrict__ mat,  // shape: (n, k, k) column-major
     const float* __restrict__ vec,   // shape: (n, k)
@@ -89,21 +124,29 @@ __global__ void gemvStridedBatchedDoubleHalfKernel(
     double* __restrict__ out,        // shape: (n, k)
     int n,
     int k) {
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid >= n * k)
-    return;
+  const int blockSize = blockDim.x;
+  const int batchPerBlock = blockSize / k;
 
-  const int batch = tid / k;
-  const int row = tid % k;
+  const int localBatch = threadIdx.x / k;
+  if (localBatch >= batchPerBlock)
+    return;
+  const int batch = blockIdx.x * batchPerBlock + localBatch;
+  const int row = threadIdx.x % k;
+  if (batch >= n)
+    return;
 
   const __half* matBase = mat + (size_t)batch * (size_t)k * (size_t)k;
   const double* vecBase = vec + (size_t)batch * (size_t)k;
-  float acc = 0.0f;
+  double acc = 0.0f;
+
+  extern __shared__ double vecShared[];
+  vecShared[threadIdx.x] = vecBase[row];
+  __syncthreads();
 
   for (int c = 0; c < k; c++) {
     __half m = (matBase + (size_t)c * (size_t)k)[row];
-    float mf = __half2float(m);
-    float vf = vecBase[c];
+    double mf = static_cast<double>(__half2float(m));
+    double vf = vecShared[localBatch * k + c];
     acc += mf * vf;
   }
 
@@ -198,13 +241,29 @@ void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  float* out,
                                  int n,
                                  int k) {
-  const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
 
-  auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedFloatHalfKernel<<<grid, blockSize, 0, stream>>>(
-      reinterpret_cast<const __half*>(mat), vec, out, n, k);
+  if (k <= 8) {
+    const int total = n * k;
+    const int blockSize = 128;
+    const int grid = (total + blockSize - 1) / blockSize;
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+    gemvStridedBatchedFloatHalfKernel<<<grid, blockSize, 0, stream>>>(
+        reinterpret_cast<const __half*>(mat), vec, out, n, k);
+  } else {
+    int batchPerBlock = 256 / k;
+    int blockSize = batchPerBlock * k;
+    if (k > 128) {
+      blockSize = (k + 31) / 32 * 32;
+      batchPerBlock = 1;
+    }
+
+    const int grid = (n + batchPerBlock - 1) / batchPerBlock;
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+    gemvStridedBatchedFloatHalfKernelShared<<<grid, blockSize, sizeof(float) * batchPerBlock * k, stream>>>(
+        reinterpret_cast<const __half*>(mat), vec, out, n, k);
+  }
 }
 
 void gemvStridedBatchedDoubleBf16(const at::BFloat16* mat,
@@ -227,10 +286,17 @@ void gemvStridedBatchedDoubleHalf(const at::Half* mat,
                                   int n,
                                   int k) {
   const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
+
+  int batchPerBlock = 256 / k;
+  int blockSize = batchPerBlock * k;
+  if (k > 128) {
+    blockSize = (k + 31) / 32 * 32;
+    batchPerBlock = 1;
+  }
+
+  const int grid = (n + batchPerBlock - 1) / batchPerBlock;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedDoubleHalfKernel<<<grid, blockSize, 0, stream>>>(
+  gemvStridedBatchedDoubleHalfKernel<<<grid, blockSize, sizeof(double) * batchPerBlock * k, stream>>>(
       reinterpret_cast<const __half*>(mat), vec, out, n, k);
 }
