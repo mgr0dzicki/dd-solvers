@@ -13,6 +13,21 @@ __device__ __forceinline__ float upcastLowPrecision(__half v) {
   return __half2float(v);
 }
 
+template <typename T>
+struct ToCudaType {
+  using t = T;
+};
+
+template <>
+struct ToCudaType<at::BFloat16> {
+  using t = __nv_bfloat16;
+};
+
+template <>
+struct ToCudaType<at::Half> {
+  using t = __half;
+};
+
 __global__ void gemvStridedBatchedFloatHalfKernelShared(
     const __half* __restrict__ mat,  // shape: (n, k, k) column-major
     const float* __restrict__ vec,   // shape: (n, k)
@@ -76,61 +91,19 @@ __global__ void gemvStridedBatchedKernel(
   out[(size_t)batch * (size_t)k + (size_t)row] = acc;
 }
 
-void gemvStridedBatchedDoubleDouble(const double* mat,
-                                    const double* vec,
-                                    double* out,
-                                    int n,
-                                    int k) {
+template <typename T, typename U>
+void gemvStridedBatchedLaunch(const T* mat,
+                              const U* vec,
+                              U* out,
+                              int n,
+                              int k) {
   const int total = n * k;
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
 
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<double, double>
+  gemvStridedBatchedKernel<ToCudaType<T>::t, ToCudaType<U>::t>
       <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
-}
-
-void gemvStridedBatchedDoubleFloat(const float* mat,
-                                   const double* vec,
-                                   double* out,
-                                   int n,
-                                   int k) {
-  const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
-
-  auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<float, double>
-      <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
-}
-
-void gemvStridedBatchedFloatFloat(const float* mat,
-                                  const float* vec,
-                                  float* out,
-                                  int n,
-                                  int k) {
-  const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
-
-  auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<float, float>
-      <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
-}
-
-void gemvStridedBatchedFloatBf16(const at::BFloat16* mat,
-                                 const float* vec,
-                                 float* out,
-                                 int n,
-                                 int k) {
-  const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
-
-  auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<__nv_bfloat16, float>
-    <<<grid, blockSize, 0, stream>>>(
-      reinterpret_cast<const __nv_bfloat16*>(mat), vec, out, n, k);
 }
 
 void gemvStridedBatchedFloatHalf(const at::Half* mat,
@@ -138,15 +111,13 @@ void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  float* out,
                                  int n,
                                  int k) {
-
   if (k <= 8) {
     const int total = n * k;
     const int blockSize = 128;
     const int grid = (total + blockSize - 1) / blockSize;
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    gemvStridedBatchedKernel<__half, float>
-      <<<grid, blockSize, 0, stream>>>(
+    gemvStridedBatchedKernel<__half, float><<<grid, blockSize, 0, stream>>>(
         reinterpret_cast<const __half*>(mat), vec, out, n, k);
   } else {
     int batchPerBlock = 256 / k;
@@ -159,24 +130,10 @@ void gemvStridedBatchedFloatHalf(const at::Half* mat,
     const int grid = (n + batchPerBlock - 1) / batchPerBlock;
 
     auto stream = at::cuda::getCurrentCUDAStream();
-    gemvStridedBatchedFloatHalfKernelShared<<<grid, blockSize, sizeof(float) * batchPerBlock * k, stream>>>(
+    gemvStridedBatchedFloatHalfKernelShared<<<
+        grid, blockSize, sizeof(float) * batchPerBlock * k, stream>>>(
         reinterpret_cast<const __half*>(mat), vec, out, n, k);
   }
-}
-
-void gemvStridedBatchedDoubleBf16(const at::BFloat16* mat,
-                                  const double* vec,
-                                  double* out,
-                                  int n,
-                                  int k) {
-  const int total = n * k;
-  const int blockSize = 128;
-  const int grid = (total + blockSize - 1) / blockSize;
-
-  auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<__nv_bfloat16, double>
-    <<<grid, blockSize, 0, stream>>>(
-      reinterpret_cast<const __nv_bfloat16*>(mat), vec, out, n, k);
 }
 
 void gemvStridedBatchedDoubleHalf(const at::Half* mat,
@@ -197,6 +154,6 @@ void gemvStridedBatchedDoubleHalf(const at::Half* mat,
 
   auto stream = at::cuda::getCurrentCUDAStream();
   gemvStridedBatchedKernel<__half, double>
-    <<<grid, blockSize, sizeof(double) * batchPerBlock * k, stream>>>(
-      reinterpret_cast<const __half*>(mat), vec, out, n, k);
+      <<<grid, blockSize, sizeof(double) * batchPerBlock * k, stream>>>(
+          reinterpret_cast<const __half*>(mat), vec, out, n, k);
 }

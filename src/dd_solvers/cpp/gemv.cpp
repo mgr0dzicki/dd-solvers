@@ -24,39 +24,39 @@ at::Tensor gemvStridedBatched(
 
   if (mat.scalar_type() == at::ScalarType::Double &&
       vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleDouble(mat.const_data_ptr<double>(),
-                                   vec.const_data_ptr<double>(),
-                                   out.mutable_data_ptr<double>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<double>(),
+                             vec.const_data_ptr<double>(),
+                             out.mutable_data_ptr<double>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Float &&
              vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleFloat(mat.const_data_ptr<float>(),
-                                  vec.const_data_ptr<double>(),
-                                  out.mutable_data_ptr<double>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<float>(),
+                             vec.const_data_ptr<double>(),
+                             out.mutable_data_ptr<double>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Float &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatFloat(mat.const_data_ptr<float>(),
-                                 vec.const_data_ptr<float>(),
-                                 out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<float>(),
+                             vec.const_data_ptr<float>(),
+                             out.mutable_data_ptr<float>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatBf16(mat.const_data_ptr<at::BFloat16>(),
-                                vec.const_data_ptr<float>(),
-                                out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<at::BFloat16>(),
+                             vec.const_data_ptr<float>(),
+                             out.mutable_data_ptr<float>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Half &&
              vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatHalf(mat.const_data_ptr<at::Half>(),
-                                vec.const_data_ptr<float>(),
-                                out.mutable_data_ptr<float>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<at::Half>(),
+                             vec.const_data_ptr<float>(),
+                             out.mutable_data_ptr<float>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
              vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleBf16(mat.const_data_ptr<at::BFloat16>(),
-                                 vec.const_data_ptr<double>(),
-                                 out.mutable_data_ptr<double>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<at::BFloat16>(),
+                             vec.const_data_ptr<double>(),
+                             out.mutable_data_ptr<double>(), n, k);
   } else if (mat.scalar_type() == at::ScalarType::Half &&
              vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleHalf(mat.const_data_ptr<at::Half>(),
-                                 vec.const_data_ptr<double>(),
-                                 out.mutable_data_ptr<double>(), n, k);
+    gemvStridedBatchedLaunch(mat.const_data_ptr<at::Half>(),
+                             vec.const_data_ptr<double>(),
+                             out.mutable_data_ptr<double>(), n, k);
   } else {
     TORCH_CHECK(false, "Unsupported data type for matvec operation");
   }
