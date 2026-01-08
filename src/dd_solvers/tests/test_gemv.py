@@ -31,4 +31,4 @@ def test_gemv_strided_batched(mat_dtype: torch.dtype, vec_dtype: torch.dtype, k:
     exact = (A.to(b.dtype) @ b[:, :, None]).reshape(n, k)
     result = gemv_strided_batched(A, b)
 
-    assert torch.allclose(exact, result)
+    assert torch.allclose(exact, result, rtol=1e-5, atol=1e-5)

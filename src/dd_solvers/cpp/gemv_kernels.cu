@@ -101,10 +101,58 @@ void gemvStridedBatchedLaunch(const T* mat,
   const int blockSize = 128;
   const int grid = (total + blockSize - 1) / blockSize;
 
+  using MatCudaType = typename ToCudaType<T>::t;
+  using VecCudaType = typename ToCudaType<U>::t;
+
   auto stream = at::cuda::getCurrentCUDAStream();
-  gemvStridedBatchedKernel<ToCudaType<T>::t, ToCudaType<U>::t>
-      <<<grid, blockSize, 0, stream>>>(mat, vec, out, n, k);
+  gemvStridedBatchedKernel<<<grid, blockSize, 0, stream>>>(
+      reinterpret_cast<const MatCudaType*>(mat),
+      reinterpret_cast<const VecCudaType*>(vec),
+      reinterpret_cast<VecCudaType*>(out), n, k);
 }
+
+template void gemvStridedBatchedLaunch<at::BFloat16, float>(const at::BFloat16*,
+                                                            const float*,
+                                                            float*,
+                                                            int,
+                                                            int);
+
+template void gemvStridedBatchedLaunch<at::BFloat16, double>(
+    const at::BFloat16*,
+    const double*,
+    double*,
+    int,
+    int);
+
+template void gemvStridedBatchedLaunch<at::Half, float>(const at::Half*,
+                                                        const float*,
+                                                        float*,
+                                                        int,
+                                                        int);
+
+template void gemvStridedBatchedLaunch<at::Half, double>(const at::Half*,
+                                                         const double*,
+                                                         double*,
+                                                         int,
+                                                         int);
+
+template void gemvStridedBatchedLaunch<float, float>(const float*,
+                                                     const float*,
+                                                     float*,
+                                                     int,
+                                                     int);
+
+template void gemvStridedBatchedLaunch<float, double>(const float*,
+                                                      const double*,
+                                                      double*,
+                                                      int,
+                                                      int);
+
+template void gemvStridedBatchedLaunch<double, double>(const double*,
+                                                       const double*,
+                                                       double*,
+                                                       int,
+                                                       int);
 
 void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  const float* vec,
