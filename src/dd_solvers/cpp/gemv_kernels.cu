@@ -111,48 +111,47 @@ void gemvStridedBatchedLaunch(const T* mat,
       reinterpret_cast<VecCudaType*>(out), n, k);
 }
 
-template void gemvStridedBatchedLaunch<at::BFloat16, float>(const at::BFloat16*,
-                                                            const float*,
-                                                            float*,
-                                                            int,
-                                                            int);
+template void gemvStridedBatchedLaunch(const at::BFloat16*,
+                                       const float*,
+                                       float*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<at::BFloat16, double>(
-    const at::BFloat16*,
-    const double*,
-    double*,
-    int,
-    int);
+template void gemvStridedBatchedLaunch(const at::BFloat16*,
+                                       const double*,
+                                       double*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<at::Half, float>(const at::Half*,
-                                                        const float*,
-                                                        float*,
-                                                        int,
-                                                        int);
+template void gemvStridedBatchedLaunch(const at::Half*,
+                                       const float*,
+                                       float*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<at::Half, double>(const at::Half*,
-                                                         const double*,
-                                                         double*,
-                                                         int,
-                                                         int);
+template void gemvStridedBatchedLaunch(const at::Half*,
+                                       const double*,
+                                       double*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<float, float>(const float*,
-                                                     const float*,
-                                                     float*,
-                                                     int,
-                                                     int);
+template void gemvStridedBatchedLaunch(const float*,
+                                       const float*,
+                                       float*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<float, double>(const float*,
-                                                      const double*,
-                                                      double*,
-                                                      int,
-                                                      int);
+template void gemvStridedBatchedLaunch(const float*,
+                                       const double*,
+                                       double*,
+                                       int,
+                                       int);
 
-template void gemvStridedBatchedLaunch<double, double>(const double*,
-                                                       const double*,
-                                                       double*,
-                                                       int,
-                                                       int);
+template void gemvStridedBatchedLaunch(const double*,
+                                       const double*,
+                                       double*,
+                                       int,
+                                       int);
 
 void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  const float* vec,
