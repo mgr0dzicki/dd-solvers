@@ -6,10 +6,12 @@
 
 namespace dd_solvers_gemv {
 
+enum class GEMVAlgorithm : int8_t { Irrespective = 0, Sync = 1 };
+
 at::Tensor gemvStridedBatched(
     const at::Tensor& mat,  // shape: (n, k, k) row-major
-    const at::Tensor& vec   // shape: (n, k)
-) {
+    const at::Tensor& vec,  // shape: (n, k)
+    bool use_shared_memory) {
   TORCH_CHECK(
       mat.dim() == 3 && vec.dim() == 2 && mat.size(0) == vec.size(0) &&
           mat.size(1) == mat.size(2) && mat.size(1) == vec.size(1),
@@ -36,9 +38,15 @@ at::Tensor gemvStridedBatched(
                 TORCH_CHECK(false,
                             "Double-Float mixed precision is not supported.");
               } else {
-                gemvStridedBatchedLaunch(mat.const_data_ptr<MatType>(),
-                                         vec.const_data_ptr<VecType>(),
-                                         out.data_ptr<VecType>(), n, k);
+                if (use_shared_memory) {
+                  gemvStridedBatchedSharedLaunch(mat.const_data_ptr<MatType>(),
+                                                 vec.const_data_ptr<VecType>(),
+                                                 out.data_ptr<VecType>(), n, k);
+                } else {
+                  gemvStridedBatchedLaunch(mat.const_data_ptr<MatType>(),
+                                           vec.const_data_ptr<VecType>(),
+                                           out.data_ptr<VecType>(), n, k);
+                }
               }
             }));
       }));

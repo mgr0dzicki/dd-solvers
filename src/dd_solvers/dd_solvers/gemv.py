@@ -2,13 +2,17 @@ import torch
 
 
 @torch.library.custom_op("dd_solvers::gemv_strided_batched", mutates_args=())
-def gemv_strided_batched(matrices: torch.Tensor, vectors: torch.Tensor) -> torch.Tensor:
-    return torch.ops.dd_solvers_gemv.gemv_strided_batched(matrices, vectors)
+def gemv_strided_batched(
+    matrices: torch.Tensor, vectors: torch.Tensor, use_shared_memory: bool = False
+) -> torch.Tensor:
+    return torch.ops.dd_solvers_gemv.gemv_strided_batched(
+        matrices, vectors, use_shared_memory
+    )
 
 
 @gemv_strided_batched.register_fake
 def gemv_strided_batched_fake(
-    matrices: torch.Tensor, vectors: torch.Tensor
+    matrices: torch.Tensor, vectors: torch.Tensor, use_shared_memory: bool = False
 ) -> torch.Tensor:
     if matrices.ndim != 3 or vectors.ndim != 2:
         raise RuntimeError("matrices must be 3D and vectors must be 2D")

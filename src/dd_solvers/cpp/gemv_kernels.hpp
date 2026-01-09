@@ -9,4 +9,11 @@
 template <typename T, typename U>
 void gemvStridedBatchedLaunch(const T* mat, const U* vec, U* out, int n, int k);
 
+template <typename T, typename U>
+void gemvStridedBatchedSharedLaunch(const T* mat,
+                                    const U* vec,
+                                    U* out,
+                                    int n,
+                                    int k);
+
 #endif  // GEMV_KERNELS_HPP
