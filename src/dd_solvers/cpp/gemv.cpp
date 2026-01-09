@@ -8,8 +8,8 @@ namespace dd_solvers_gemv {
 
 at::Tensor gemvStridedBatched(
     const at::Tensor& mat,  // shape: (n, k, k) row-major
-    const at::Tensor& vec   // shape: (n, k)
-) {
+    const at::Tensor& vec,  // shape: (n, k)
+    bool use_shared_memory) {
   TORCH_CHECK(
       mat.dim() == 3 && vec.dim() == 2 && mat.size(0) == vec.size(0) &&
           mat.size(1) == mat.size(2) && mat.size(1) == vec.size(1),
@@ -22,44 +22,32 @@ at::Tensor gemvStridedBatched(
 
   at::Tensor out = at::empty_like(vec);
 
-  if (mat.scalar_type() == at::ScalarType::Double &&
-      vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleDouble(mat.const_data_ptr<double>(),
-                                   vec.const_data_ptr<double>(),
-                                   out.mutable_data_ptr<double>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::Float &&
-             vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleFloat(mat.const_data_ptr<float>(),
-                                  vec.const_data_ptr<double>(),
-                                  out.mutable_data_ptr<double>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::Float &&
-             vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatFloat(mat.const_data_ptr<float>(),
-                                 vec.const_data_ptr<float>(),
-                                 out.mutable_data_ptr<float>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
-             vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatBf16(mat.const_data_ptr<at::BFloat16>(),
-                                vec.const_data_ptr<float>(),
-                                out.mutable_data_ptr<float>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::Half &&
-             vec.scalar_type() == at::ScalarType::Float) {
-    gemvStridedBatchedFloatHalf(mat.const_data_ptr<at::Half>(),
-                                vec.const_data_ptr<float>(),
-                                out.mutable_data_ptr<float>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::BFloat16 &&
-             vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleBf16(mat.const_data_ptr<at::BFloat16>(),
-                                 vec.const_data_ptr<double>(),
-                                 out.mutable_data_ptr<double>(), n, k);
-  } else if (mat.scalar_type() == at::ScalarType::Half &&
-             vec.scalar_type() == at::ScalarType::Double) {
-    gemvStridedBatchedDoubleHalf(mat.const_data_ptr<at::Half>(),
-                                 vec.const_data_ptr<double>(),
-                                 out.mutable_data_ptr<double>(), n, k);
-  } else {
-    TORCH_CHECK(false, "Unsupported data type for matvec operation");
-  }
+  AT_DISPATCH_FLOATING_TYPES_AND2(
+      at::ScalarType::Half, at::ScalarType::BFloat16, mat.scalar_type(),
+      "gemv_mat_dispatch", ([&] {
+        using MatType = scalar_t;
+
+        AT_DISPATCH_FLOATING_TYPES(
+            vec.scalar_type(), "gemv_vec_dispatch", ([&] {
+              using VecType = scalar_t;
+
+              if constexpr (std::is_same<MatType, double>::value &&
+                            std::is_same<VecType, float>::value) {
+                TORCH_CHECK(false,
+                            "Double-Float mixed precision is not supported.");
+              } else {
+                if (use_shared_memory) {
+                  gemvStridedBatchedSharedLaunch(mat.const_data_ptr<MatType>(),
+                                                 vec.const_data_ptr<VecType>(),
+                                                 out.data_ptr<VecType>(), n, k);
+                } else {
+                  gemvStridedBatchedLaunch(mat.const_data_ptr<MatType>(),
+                                           vec.const_data_ptr<VecType>(),
+                                           out.data_ptr<VecType>(), n, k);
+                }
+              }
+            }));
+      }));
 
   return out;
 }

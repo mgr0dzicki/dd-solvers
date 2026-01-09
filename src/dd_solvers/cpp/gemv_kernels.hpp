@@ -6,46 +6,14 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-void gemvStridedBatchedDoubleDouble(const double* mat,
-                                    const double* vec,
-                                    double* out,
+template <typename T, typename U>
+void gemvStridedBatchedLaunch(const T* mat, const U* vec, U* out, int n, int k);
+
+template <typename T, typename U>
+void gemvStridedBatchedSharedLaunch(const T* mat,
+                                    const U* vec,
+                                    U* out,
                                     int n,
                                     int k);
-
-void gemvStridedBatchedDoubleFloat(const float* mat,
-                                   const double* vec,
-                                   double* out,
-                                   int n,
-                                   int k);
-
-void gemvStridedBatchedFloatFloat(const float* mat,
-                                  const float* vec,
-                                  float* out,
-                                  int n,
-                                  int k);
-
-void gemvStridedBatchedFloatBf16(const at::BFloat16* mat,
-                                 const float* vec,
-                                 float* out,
-                                 int n,
-                                 int k);
-
-void gemvStridedBatchedFloatHalf(const at::Half* mat,
-                                 const float* vec,
-                                 float* out,
-                                 int n,
-                                 int k);
-
-void gemvStridedBatchedDoubleBf16(const at::BFloat16* mat,
-                                  const double* vec,
-                                  double* out,
-                                  int n,
-                                  int k);
-
-void gemvStridedBatchedDoubleHalf(const at::Half* mat,
-                                  const double* vec,
-                                  double* out,
-                                  int n,
-                                  int k);
 
 #endif  // GEMV_KERNELS_HPP

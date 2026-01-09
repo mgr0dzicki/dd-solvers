@@ -11,13 +11,23 @@ def mul_torch(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return (A @ b[:, :, None].to(A.dtype)).to(b.dtype)
 
 
-def mul_custom(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    return dd_solvers.gemv_strided_batched(A, b)
+def mul_custom_irrespective(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return dd_solvers.gemv_strided_batched(A, b, use_shared_memory=False)
 
 
-MAX_ELEMENTS = 2**26
+def mul_custom_synch(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return dd_solvers.gemv_strided_batched(A, b, use_shared_memory=True)
 
-ks = range(2, 130)
+
+algorithms = {
+    "irrespective": mul_custom_irrespective,
+    "synchronized": mul_custom_synch,
+    "torch": mul_torch,
+}
+
+MAX_ELEMENTS = 2**27
+
+ks = range(2, 150)
 results = []
 
 for k in tqdm.tqdm(ks):
@@ -38,7 +48,7 @@ for k in tqdm.tqdm(ks):
             b = torch.randn((n, k), device="cuda", dtype=b_dtype)
             exact = A.to(torch.float64) @ b.to(torch.float64)[:, :, None]
 
-            for alg, alg_name in [(mul_custom, "custom"), (mul_torch, "torch")]:
+            for alg_name, alg in algorithms.items():
                 err_norm = torch.linalg.norm(
                     exact.flatten() - alg(A, b).flatten()
                 ).item()
