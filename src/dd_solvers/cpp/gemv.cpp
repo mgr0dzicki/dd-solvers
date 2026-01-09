@@ -6,8 +6,6 @@
 
 namespace dd_solvers_gemv {
 
-enum class GEMVAlgorithm : int8_t { Irrespective = 0, Sync = 1 };
-
 at::Tensor gemvStridedBatched(
     const at::Tensor& mat,  // shape: (n, k, k) row-major
     const at::Tensor& vec,  // shape: (n, k)

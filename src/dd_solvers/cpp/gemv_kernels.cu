@@ -118,9 +118,9 @@ void gemvStridedBatchedSharedLaunch(const T* mat,
                                     U* out,
                                     int n,
                                     int k) {
-  int batchPerBlock = 128 / k;
-  int blockSize = 128;
-  if (k > 64) {
+  int batchPerBlock = 256 / k;
+  int blockSize = 256;
+  if (k > 128) {
     blockSize = (k + 31) / 32 * 32;
     batchPerBlock = 1;
   }

@@ -22,13 +22,12 @@ def mul_custom_synch(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 algorithms = {
     "irrespective": mul_custom_irrespective,
     "synchronized": mul_custom_synch,
-    # "torch": mul_torch,
+    "torch": mul_torch,
 }
 
 MAX_ELEMENTS = 2**27
 
-# ks = range(2, 130)
-ks = range(55, 69)
+ks = range(2, 150)
 results = []
 
 for k in tqdm.tqdm(ks):
