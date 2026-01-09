@@ -111,47 +111,17 @@ void gemvStridedBatchedLaunch(const T* mat,
       reinterpret_cast<VecCudaType*>(out), n, k);
 }
 
-template void gemvStridedBatchedLaunch(const at::BFloat16*,
-                                       const float*,
-                                       float*,
-                                       int,
-                                       int);
+#define INSTANTIATE_GEMV(TMat, TVec)                                           \
+  template void gemvStridedBatchedLaunch(const TMat*, const TVec*, TVec*, int, \
+                                         int)
 
-template void gemvStridedBatchedLaunch(const at::BFloat16*,
-                                       const double*,
-                                       double*,
-                                       int,
-                                       int);
-
-template void gemvStridedBatchedLaunch(const at::Half*,
-                                       const float*,
-                                       float*,
-                                       int,
-                                       int);
-
-template void gemvStridedBatchedLaunch(const at::Half*,
-                                       const double*,
-                                       double*,
-                                       int,
-                                       int);
-
-template void gemvStridedBatchedLaunch(const float*,
-                                       const float*,
-                                       float*,
-                                       int,
-                                       int);
-
-template void gemvStridedBatchedLaunch(const float*,
-                                       const double*,
-                                       double*,
-                                       int,
-                                       int);
-
-template void gemvStridedBatchedLaunch(const double*,
-                                       const double*,
-                                       double*,
-                                       int,
-                                       int);
+INSTANTIATE_GEMV(at::BFloat16, float);
+INSTANTIATE_GEMV(at::BFloat16, double);
+INSTANTIATE_GEMV(at::Half, float);
+INSTANTIATE_GEMV(at::Half, double);
+INSTANTIATE_GEMV(float, float);
+INSTANTIATE_GEMV(float, double);
+INSTANTIATE_GEMV(double, double);
 
 void gemvStridedBatchedFloatHalf(const at::Half* mat,
                                  const float* vec,
