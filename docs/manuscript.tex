@@ -1176,72 +1176,12 @@ Therefore we employ our kernels in the \verb|Inv| class, choosing RPT-I
 for smallest matrices ($k\leq 5$ or $k\leq 15$ depending on the precision)
 and RPT-S otherwise.
 
-\subsection{CG Method}
-\label{sec:cg-method}
+\subsection{BSR Matrix-Vector Product}
 
-The implementation of the \texttt{CG} solver is based on the implementation
-of \texttt{cg} function from \texttt{scipy.sparse.linalg} module \cite{scipy-cg},
-with two important modifications which allow for better performance in our scenario:
-fused operations and using BSR format for the matrix-vector product. Additionally,
-to support the experiments in Section~\ref{sec:dependence-on-parameters},
-we implemented an estimator for the condition number of the preconditioned
-operator, computed from the PCG coefficients (see \cite[Section~6.7.3]{Saad}).
-
-\subsubsection{Fused Operations}
-\label{sec:fused-operations}
-
-A naive PyTorch implementation of a single CG iteration is presented in
-Listing~\ref{lst:cg-single-iter}. Because PyTorch operations are executed
-eagerly, such implementation results in creation of unnecessary intermediate
-tensors. For example, the execution of line 7
-consists of launching two GPU kernels. The first one computes the right-hand
-side \texttt{alpha * p} and stores it in the temporary tensor in the global memory.
-The second kernel reads the result and adds it to \texttt{x}. The number of costly
-memory operations can be reduced by fusing these two operations into a single
-one.
-
-\begin{algorithm}
-\vspace{-3pt}
-\begin{lstlisting}[
-  caption={Simplified PyTorch implementation of a single PCG iteration.},
-  label={lst:cg-single-iter},
-  style=Python
-]
-z = preconditioner.solve(r)
-rho_cur = torch.dot(r, z)
-beta = rho_cur / rho_prev
-p = z + beta * p
-q = A @ p
-alpha = rho_cur / torch.dot(p, q)
-x += alpha * p
-r -= alpha * q
-rho_prev = rho_cur
-\end{lstlisting}
-\vspace{-3pt}
-\end{algorithm}
-
-This could have been realized by calling \verb|torch.add(x, p, alpha=alpha, out=x)|.
-Unfortunately, the \verb|alpha| argument of \verb|torch.add| is currently
-expected to be a CPU scalar. Therefore in our case \verb|alpha| would be
-first transferred to the CPU, which would introduce an unnecessary
-synchronization point.
-
-However, it is not necessary to write a custom CUDA kernel to optimize this operation,
-thanks to the \verb|torch.compile| feature described in Section~\ref{sec:pytorch}.
-Applying it just to the expression in line 7 of
-Listing~\ref{lst:cg-single-iter} yields an almost twofold speedup.
-For example, on an NVIDIA A100 GPU with $x$ containing 100M elements,
-the execution time of line 7 decreases from 1.17\,ms to 0.67\,ms.
-Similar optimizations were applied to lines 4 and 8.
-
-\subsubsection{BSR Matrix-Vector Product}
-
-Looking at \ref{lst:cg-single-iter}, we see that most of the CG iteration
-consists of simple element-wise vector operations like dot product, addition or
-scalar multiplication. Therefore, the per-iteration cost is dominated by the preconditioner
-solve (line 1) and the matrix-vector product (line 5). The latter can become
+The per-iteration cost of the PCG method is dominated by the preconditioner
+solve and the matrix-vector product. The latter can become
 the most expensive step when using a lightweight preconditioner (such as massively
-parallel ASM) as confirmed by our benchmarks.
+parallel variant of the Schwarz preconditioner) as confirmed by our benchmarks.
 
 We therefore optimize the computation of $\bm{A}\bm{p}$ by exploiting the block structure of the
 stiffness matrix $\bm{A}$. If the unknowns associated with each element
@@ -1264,7 +1204,7 @@ cuSPARSE library, which is accessible via a PyTorch
 interface. However, in our benchmarks it underperformed the CSR matrix-vector
 product from the same library.
 To improve performance, we implemented (in CUDA kernels)
-four algorithms from \cite{bsr-mv}: block-by-block (b-by-b),
+four algorithms from~\cite{bsr-mv}: block-by-block (b-by-b),
 column-by-column (c-by-c), row\nobreakdash-per\nobreakdash-thread without synchronization (RPT) and
 row-per-thread with synchronization (RPT-S). Reductions in the block-by-block and
 column-by-column kernels use warp-shuffle operations \cite[Section 10.22]{cusparse}.
@@ -1276,8 +1216,10 @@ kernels.
 We also introduce a modified RPT variant: RPT-I, which assigns
 rows to threads irrespective of thread block boundaries (see
 Algorithm~\ref{alg:bsr-mv-naive}). In the pseudocode, the BSR matrix $A$ is
-represented by the arrays $A.crow\_indices$,
-$A.col\_indices$ and $A.values$. The algorithm computes the matrix-vector product
+represented by the arrays $A.crow\_indices$, $A.col\_indices$ and $A.values$.
+The blocks of $A.values$ are assumed to be stored in column-major order
+within each block (cf. line 10), which follows~\cite{bsr-mv} and ensures
+coalesced memory accesses. The algorithm computes the matrix-vector product
 $Ax$ and stores the result in the $global\_out$ array. The RPT-I kernel likewise
 executes on a one-dimensional grid but uses a~block size of 256.
 
@@ -1293,7 +1235,7 @@ executes on a one-dimensional grid but uses a~block size of 256.
   $local\_out \gets 0$\;
   \For{$block \gets first\_block;\; block < after\_last\_block;\; block\!+\!+$} {
     \For{$c\gets 0;\; c < b;\; c\!+\!+$} {
-        $A\_elem \gets A.values[block][r][c]$\;
+        $A\_elem \gets A.values[block][c][r]$\;
         $x\_elem \gets x[A.col\_indices[block] \cdot bs + c]$\;
         $local\_out\ +\!= A\_elem \cdot x\_elem$
     }
@@ -1305,16 +1247,17 @@ All variants were benchmarked on stiffness matrices for
 several model problems of different sizes, with polynomial degress $p=1,...,5$ in 2D and $p=1,2,3$
 in 3D case. The indices were stored as 32-bit integers in all cases, while the
 data type of the matrix entries (and the whole computation) was either 32-bit
-or 64-bit floating point. The time was measured on an NVIDIA A100 GPU and
-an NVIDIA H100 GPU. Results appear in Table~\ref{tab:bsr-mv-benchmark}.
+or 64-bit floating point. The time was measured on an NVIDIA A100 GPU.
+% Results appear in Table~\ref{tab:bsr-mv-benchmark}.
 
-% \begin{table}
-%   \caption{Speedup of our implementations of the BSR matrix-vector product over the
-%   CSR matrix-vector product available in cuSPARSE. Block-by-block algorithm requires
-%   $b\leq 5$.}
-%   \label{tab:bsr-mv-benchmark}
-%   \input{tables/benchmark_bsrmv.tex}
-% \end{table}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{bsrmv_memory_throughput}
+  \caption{Performance of our implementations of the BSR matrix-vector
+  product for various stiffness matrices. Block-by-block algorithm requires
+  $b\leq 5$.}
+  \label{fig:bsrmv_memory_throughput}
+\end{figure}
 
 The benchmarks demonstrate that the time of the matrix-vector product can be
 significantly reduced by using BSR format, with the best speedups reaching

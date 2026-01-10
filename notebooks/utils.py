@@ -13,6 +13,8 @@ plt.rcParams.update(
     }
 )
 
+MEASURED_BANDWIDTH = 1774
+MEASURED_BANDWIDTH_STR = "1,774GB/s"
 
 def extract_row_metadata(row):
     metadata = (
