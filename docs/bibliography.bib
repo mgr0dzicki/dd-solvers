@@ -419,3 +419,19 @@ author = {M. Papadrakakis and G. Stavroulakis and A. Karatarakis},
 keywords = {Hybrid computing, Multi-core processing, Many-core processing, Graphics processing units, Domain decomposition methods, FETI method},
 abstract = {Recent advances in graphics processing units (GPUs) technology open a new era in high performance computing. Applications of GPUs to scientific computations are attracting a lot of attention due to their low cost in conjunction with their inherently remarkable performance features and the recently enhanced computational precision and improved programming tools. Domain decomposition methods (DDM) constitute today an important category of methods for the solution of highly demanding problems in simulation-based applied science and engineering. Among them, dual domain decomposition methods have been successfully applied in a variety of problems in both sequential as well as in parallel/distributed processing systems. In this work, we demonstrate the implementation of the FETI method to a hybrid CPU–GPU computing environment. Parametric tests on implicit finite element structural mechanics benchmark problems revealed the tremendous potential of this type of hybrid computing environment as a result of the full exploitation of multi-core CPU hardware resources and the intrinsic software and hardware features of the GPUs as well as the numerical properties of the solution method.}
 }
+
+@article{babelstream,
+title = {Evaluating attainable memory bandwidth of parallel programming models via BabelStream},
+year = {2018},
+issue_date = {January 2018},
+publisher = {Inderscience Publishers},
+address = {Geneva 15, CHE},
+volume = {17},
+number = {3},
+issn = {1742-7185},
+abstract = {Many scientific codes consist of memory bandwidth bound kernels. One major advantage of many-core devices such as general purpose graphics processing units GPGPUs and the Intel Xeon Phi is their focus on providing increased memory bandwidth over traditional CPU architectures. Peak memory bandwidth is usually unachievable in practice and so benchmarks are required to measure a practical upper bound on expected performance. We augment the standard STREAM kernels with a dot product kernel to investigate the performance of simple reduction operations on large arrays. The choice of programming model should ideally not limit the achievable performance on a device. BabelStream formally GPU-STREAM has been updated to incorporate a wide variety of the latest parallel programming models, all implementing the same parallel scheme. As such this tool can be used as a kind of Rosetta Stone which provides both a cross-platform and cross-programming model array of results of achievable memory bandwidth.},
+journal = {Int. J. Comput. Sci. Eng.},
+month = jan,
+pages = {247–262},
+numpages = {16}
+}

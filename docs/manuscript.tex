@@ -381,6 +381,16 @@ the preconditioned hybrid Schwarz operator $T_{hyb}:V\to V$, defined as
   T_{hyb} = T_C + \left(I - T_C\right) \sum_{i=0}^{N_H-1} T_i(I-T_C).\label{T_hyb_def}
 \end{equation}
 
+Note that, unlike in \cite{Przykry}, we do not employ
+a simplified, inexact form in the definitions of $T_C$ and $T_i$.
+The simplified form can be beneficial in a matrix\nobreakdash-free
+context, where its values are evaluated on-the-fly. However, it yields no
+computational advantage if assembled in advance,
+as its matrix has the same sparsity
+pattern as the original form $\mathcal{A}_h$. Furthermore, maintaining both forms
+would double the memory footprint, significantly reducing size of the problem
+that can be solved on a single GPU.
+
 To utilize the PCG method, the operators $T_{add}$ and $T_{hyb}$ must be
 symmetric and positive definite (SPD) with respect to the inner product induced
 by $\mathcal{A}_h$. Sufficient conditions for $T_{add}$ to satisfy these properties,
@@ -722,10 +732,11 @@ the beginning of \textit{M\_{hyb}\_{loc}}, saving computational time.
 \label{chap:implementation}
 
 This section describes our GPU implementation of the domain decomposition
-solver for the linear
-system~\eqref{auf}. The implementation targets NVIDIA GPUs with compute capability 8.0 or
-higher, but we expect that the conclusions we draw from its evaluation
-generalize to other highly parallel architectures.
+solver for the linear system~\eqref{auf}. We choose A100 SXM4 80GB as
+the optimization target, and use it for all benchmarks and experiments.
+However, the implementation supports any NVIDIA GPU with compute capability
+8.0 or higher. Morever, we expect that the conclusions we draw from its
+evaluation generalize to other highly parallel architectures.
 
 The presented solver is implemented in Python 3 and relies on the PyTorch 2
 framework~\cite{pytorch,pytorch2} for GPU-accelerated linear algebra operations.
@@ -1026,38 +1037,83 @@ slightly more general problem:
 given a batch of $N$ matrices of size $k \times k$ (stored as a tensor $mat$ of shape $(N, k, k)$)
 and a batch of $N$ vectors of size $k$ (stored as a tensor $x$ of shape $(N, k)$),
 compute the batched matrix-vector product and return the result as another tensor of
-shape $(N, k)$. As a~solution, we propose a CUDA kernel that employs a single thread to compute each element
-of the output tensor $y$, leading to the straightforward Algorithm~\ref{alg:batched-mat-vec}.
-A major advantage of this approach is that it supports any matrix size $k$.
+shape $(N, k)$.
 
-The matrices $mat$ are assumed to be
-stored in column-major order (cf. line 7), which ensures that most accesses to the
-elements of $mat$ can be coalesced (see \cite[Section 5.3.2]{cuda-guide}). This
-matches the \verb|Inv| solver use case, since the matrices $\bm{A_i}^{-1}$
-returned by \verb|torch.linalg.inv| are already in column-major order.
-Even if they were not, no additional steps would be required, because the matrices $\bm{A_i}$
-(and therefore their inverses $\bm{A_i}^{-1}$) are symmetric (see~\eqref{A_i_def}).
+As a~solution, we propose two algorithms implemented as CUDA kernels.
+The first, denoted as RPT-I and presented in
+Algorithm~\ref{alg:batched-mat-vec-irrespective}, implements a~straightforward approach.
+Each thread computes a single element of the output tensor $y$ by alternately reading
+elements from $mat$ and $x$ to accumulate the dot product. The second,
+denoted as RPT-S, first loads all required elements of $x$ into shared memory
+and then performs the dot product using these cached values. This approach is
+detailed in Algorithm~\ref{alg:batched-mat-vec-synchronized}.
 
 \begin{algorithm}
-  \caption{Batched dense matrix-vector product kernel}
-  \label{alg:batched-mat-vec}
-  $t \gets thread\_global\_idx$\;
+  \caption{Batched dense matrix-vector product -- RPT-I kernel}
+  \label{alg:batched-mat-vec-irrespective}
+  $t \gets blockDim.x \cdot blockIdx.x + threadIdx.x$\;
   \lIf {$t \geq N k$} { \Return }
   $b \gets \lfloor t / k \rfloor$\;
   $r \gets t \!\!\mod k$\;
   $acc \gets 0$\;
   \For{$c \gets 0;\; c < k;\; c\!+\!+$} {
     $mat\_elem \gets mat[b, c, r]$\;
-    $x\_elem \gets x[b, c]$\;
     $mat\_elem\_higher\_prec \gets \Call{ConvertTo}{mat\_elem, \textbf{typeof}({x\_elem})}$\;
+    $x\_elem \gets x[b, c]$\;
     $acc\ +\!= mat\_elem\_higher\_prec \cdot x\_elem$
   }
   $y[b, r] \gets acc$
 \end{algorithm}
 
-The matrices $mat$ may be stored in precision lower than that of vectors $x$ and $y$.
-In such case each matrix element is upcast after being
-fetched from memory (line 9). Thus multiplication
+\begin{algorithm}
+  \caption{Batched dense matrix-vector product -- RPT-S kernel}
+  \label{alg:batched-mat-vec-synchronized}
+  $batches\_per\_block \gets \lfloor blockDim.x / k \rfloor$\;
+  $local\_batch\_idx \gets \lfloor threadIdx.x / k \rfloor$\;
+  \lIf {$local\_batch\_idx \geq batches\_per\_block$} { \Return }
+
+  $b \gets blockIdx.x \cdot batches\_per\_block + local\_batch\_idx$\;
+  $r \gets threadIdx.x \!\!\mod k$\;
+  \lIf {$b \geq N$} { \Return }
+
+  $shared\_x[0 \slice blockDim.x - 1] \gets \text{init shared array of the same type as } x$\;
+  $shared\_x[threadIdx.x] \gets x[b, r]$\;
+  $sync\_threads()$\;
+
+  $acc \gets 0$\;
+  \For{$c \gets 0;\; c < k;\; c\!+\!+$} {
+    $mat\_elem \gets mat[b, c, r]$\;
+    $mat\_elem\_higher\_prec \gets \Call{ConvertTo}{mat\_elem, \textbf{typeof}({x\_elem})}$\;
+    $x\_elem \gets shared\_x[local\_batch\_idx \cdot k + c]$\;
+    $acc\ +\!= mat\_elem\_higher\_prec \cdot x\_elem$
+  }
+  $y[b, r] \gets acc$
+\end{algorithm}
+
+In RPT-I, the assignment of threads to output elements is independent of the batch
+structure; thus any $k$ is supported regardless of the kernel block size.
+We therefore use a constant block size of $128$ threads, which
+was found to yield the best overall performance. In contrast, RPT-S requires
+that each $k$-element vector from the batch is processed within a single thread block.
+We set the block size to $256$ for $k\leq 128$, ensuring that at least two vectors
+are processed per block. For $k>128$ we set the block size to smallest multiple of $32$
+greater than or equal to $k$, such that each block processes a single vector.
+This limits the maximum supported $k$ to $1024$; however, since such large matrices
+are not used in Schwarz preconditioners, this limitation is acceptable.
+
+The matrices $mat$ are assumed to be
+stored in column-major order (cf. lines 7 and 12 in
+Algorithms~\ref{alg:batched-mat-vec-irrespective} and~\ref{alg:batched-mat-vec-synchronized},
+respectively), which ensures that most accesses to the
+elements of $mat$ can be coalesced (see \cite[Section 5.3.2]{cuda-guide}). This
+matches the \verb|Inv| solver use case, since the matrices $\bm{A_i}^{-1}$
+returned by \verb|torch.linalg.inv| are already in column-major order.
+Even if they were not, no additional steps would be required, because the matrices $\bm{A_i}$
+(and therefore their inverses $\bm{A_i}^{-1}$) are symmetric (see~\eqref{A_i_def}).
+
+The matrices $mat$ may be stored in a precision lower than that of vectors $x$ and $y$.
+In such cases each matrix element is upcast after being
+fetched from memory. Thus multiplication
 and accumulation are always performed in the precision of vectors $x$ and $y$.
 Because these are only two floating\nobreakdash-point operations per element read from $mat$,
 the algorithm is memory-bound and reducing computation precision does not
@@ -1067,47 +1123,58 @@ As is usual for memory-bound operations, we measure the kernel performance
 in terms of achieved memory throughput, calculated
 as the ratio of the total size of the input and output tensors ($mat$, $x$, $y$)
 to the kernel execution time.
-We benchmarked this metric on an A100 GPU for all supported precisions and for
-$k=2,...,128$. For each $k$ we selected
-the largest batch size $N$ satisfying $Nk^2\leq 2^{30}$
+To assess the optimality of our algorithms, we compare the achieved throughput
+to the peak memory bandwidth measured on the target GPU using the
+\verb|triad| benchmark from the BabelStream suite \cite{babelstream}.
+
+We benchmarked our algorithms for various combinations of precisions.
+For $mat$ we used $\verb|float16|$, $\verb|bfloat16|$, $\verb|float32|$
+and $\verb|float64|$ when $x$ was in $\verb|float64|$, and
+$\verb|float16|$, $\verb|bfloat16|$, $\verb|float32|$ when $x$ was in $\verb|float32|$.
+We tested matrix sizes $k$ ranging from $2$ to $149$, which covers the
+typical sizes used in the Schwarz preconditioners (see
+Section~\ref{chap:experiments}).
+For each $k$ we selected
+the largest batch size $N$ satisfying $Nk^2\leq 2^{27}$
 to saturate the GPU. The PyTorch implementation serves as a~baseline.
 Note that PyTorch requires $mat$ and $x$ to have the same precision;
-in mixed-precision cases we therefore downcast $x$ before
+in mixed\nobreakdash-precision cases we therefore need to downcast $x$ before
 multiplication and upcast the result $y$ afterwards. This introduces extra
-overhead and yields less accurate outputs than our implementation.
+overhead and yields much less accurate outputs than our implementation.
 
-The results of the comparison are shown in Figure~\ref{fig:matrix_vec_tput}.
-They indicate that our solution sustains high throughput
-across the tested matrix sizes: $71-86\%$ of the A100 theoretical peak
-memory bandwidth (according to the vendor datasheet)
-for \verb|float64| and \verb|float32|, and $64-79\%$
-for \verb|bfloat16| and \verb|float16|. Consequently, the theoretical upper
-bound on the speedup any alternative algorithm could obtain (on an A100) is
-approximately $1.16-1.56\times$, depending on precision and matrix size.
-However, reaching that bound requires sustained peak memory\nobreakdash-bandwidth utilization,
-which in practice is generally approached only by simple streaming operations
-(for example, large contiguous device-to-device copies).
+The results are similar for all precision combinasions; therefore, in
+Figure~\ref{fig:matrix_vec_tput} we present only
+two representative cases: when $mat$ is stored in \verb|float16| and
+$x$ is in either \verb|float32| or \verb|float64|.
+RPT-S sustains high throughput across the tested matrix sizes, reaching
+over $84\%$ of the achievable A100 memory bandwidth.
+RPT-I outperforms RPT-S only for a few smallest matrix sizes, where the
+overhead of synchronizing threads in RPT-S becomes significant.
+For $k\geq 16$, RPT-S is consistently faster
+than RPT-I, and for some precision combinations (for example
+float16$\times$float64) the difference is substantial.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=\textwidth]{matrix_vec_tput}
-%   \caption{Performance of the batched dense matrix-vector product at different
-%   precisions: our implementation vs. PyTorch. The red line indicates the
-%   theoretical peak memory bandwidth of the A100 80GB SXM used in the experiments.}
-%   \label{fig:matrix_vec_tput}
-% \end{figure}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{matrix_vec_tput}
+  \caption{Performance of the batched dense matrix-vector product at different
+  precisions: our implementation vs. PyTorch. The red line indicates the
+  measured peak memory bandwidth of the A100 SXM4 80GB used in the experiments.}
+  \label{fig:matrix_vec_tput}
+\end{figure}
 
 In contrast, the
 PyTorch implementation performs poorly at the smallest matrix sizes, being
-$10-60\times$ slower than ours for $k\leq 4$. Its throughput grows with $k$
+$10-70\times$ slower than ours for $k\leq 4$. Its throughput grows with $k$
 and becomes competitive around $k\approx 64$, with the exact threshold
-depending on the precision. However, the ASM preconditioner primarily targets
+depending on the precision. However, the Schwarz preconditioners primarily targets
 smaller matrix sizes when a~\verb|DenseBatchSolver| is used. In
-Chapter~\ref{chap:experiments} we show that, in most scenarios, the optimal
-choice is $21\leq k\leq 60$ with \verb|float16| precision -- settings for which
-our implementation is $1.54 - 4.42\times$ faster than PyTorch.
-Therefore we consistently employ our kernel in the \verb|Inv| class
-for all precisions and matrix sizes.
+Section~\ref{chap:experiments} we show that, in most scenarios, the optimal
+choice is $21\leq k\leq 60$\todo{czy na pewno?} with \verb|float16| precision
+-- settings for which RPT-S is $1.43 - 4.75\times$ faster than PyTorch.
+Therefore we employ our kernels in the \verb|Inv| class, choosing RPT-I
+for smallest matrices ($k\leq 5$ or $k\leq 15$ depending on the precision)
+and RPT-S otherwise.
 
 \subsection{CG Method}
 \label{sec:cg-method}
@@ -1215,9 +1282,9 @@ $Ax$ and stores the result in the $global\_out$ array. The RPT-I kernel likewise
 executes on a one-dimensional grid but uses a~block size of 256.
 
 \begin{algorithm}
-  \caption{RPT-I multiplication kernel}
+  \caption{BSR matrix-vector product -- RPT-I kernel}
   \label{alg:bsr-mv-naive}
-  $target\_row \gets thread\_global\_idx$\;
+  $target\_row \gets blockDim.x \cdot blockIdx.x + threadIdx.x$\;
   $target\_block\_row \gets \lfloor target\_row\ /\ b\rfloor$\;
   \lIf {$target\_block\_row \geq A.crow\_indices.size - 1$} { \Return }
   $r \gets target\_row\!\!\mod b$\;
@@ -1411,7 +1478,7 @@ is always computed in double precision, but lower\nobreakdash-precision arithmet
 might be used internally by the preconditioner according to the choice of
 its parameters (see Section~\ref{sec:solvers-overview}).
 
-The GPU we use to run all experiments in this chapter is an NVIDIA A100 80GB SXM.
+The GPU we use to run all experiments in this chapter is an NVIDIA A100 SXM4 80GB.
 We use CUDA Events \cite[Section 6.2.8.8]{cuda-guide} to measure GPU timings.
 The general measurement procedure is as follows. We perform $N$ rounds, each
 consisting of $K$ consecutive runs of the measured phase and record the total
