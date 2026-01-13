@@ -803,40 +803,21 @@ class AdditiveSchwarz(SchwarzOperator):
         return timings
 
     @torch.compile
-    def _solve_regular(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
+    def solve(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
         x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        x_i = x_lower_precision.reshape(self.n_solvers, -1)
+        y_i = self.local_solvers.solve(x_i)
+        y = y_i.flatten()
         x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
         x_c = torch.segment_reduce(
             x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
         )
-        x_i = x_lower_precision.reshape(self.n_solvers, -1)
-        y_c = self.coarse_solver.solve(x_c)[0]
-        y_i = self.local_solver.solve(x_i)
-        y = y_i.flatten()
+        y_c = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
         )
         y += y_solvers.repeat_interleave(self.dofs_per_solver, output_size=y.shape[0])
         return y.to(rhs.dtype), {}
-
-    @torch.compile
-    def _solve_const_dofs_per_coarse(
-        self, rhs: torch.Tensor
-    ) -> tuple[torch.Tensor, Metadata]:
-        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        x_c = x_lower_precision.reshape(self.n_coarse, -1).sum(dim=1)
-        x_i = x_lower_precision.reshape(self.n_solvers, -1)
-        y_c = self.coarse_solver.solve(x_c)[0]
-        y_i = self.local_solver.solve(x_i)
-        y = y_i.flatten()
-        y += y_c.repeat_interleave(self.dofs_per_coarse, output_size=y.shape[0])
-        return y.to(rhs.dtype), {}
-
-    def solve(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
-        if self.number_of_dofs_per_coarse_is_const:
-            return self._solve_const_dofs_per_coarse(rhs)
-        else:
-            return self._solve_regular(rhs)
 
 
 class HybridSchwarz(SchwarzOperator):
