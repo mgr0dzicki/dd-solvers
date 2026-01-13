@@ -119,10 +119,13 @@ class ExperimentFactory:
                     )
                 )
                 exception = None
+                exception_metadata = None
             except KeyboardInterrupt:
                 raise
             except Exception as e:
                 exception = str(e)
+                if hasattr(e, "metadata"):
+                    exception_metadata = e.metadata
             finally:
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -169,6 +172,7 @@ class ExperimentFactory:
             "solution repetitions": self.solution_repetitions,
             "DoFs": discrete_problem.exact_form_matrix.shape[0],
             "matrix nnz": discrete_problem.exact_form_matrix.nnz,
+            "metadata": exception_metadata,  # overwritten by `combined_result` if no exception
             **combined_result,
             "exception": exception,
         }

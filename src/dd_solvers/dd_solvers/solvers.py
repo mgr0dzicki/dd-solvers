@@ -22,11 +22,19 @@ from . import cudss
 pyamgx.initialize()
 
 
-class ConvergenceNotAchieved(Exception):
-    pass
-
-
 Metadata = dict[str, Any]
+
+
+class ConvergenceNotAchieved(Exception):
+    def __init__(self, metadata: Metadata):
+        self.metadata = metadata
+        if "iterations" not in self.metadata:
+            msg = "Convergence not achieved."
+        else:
+            msg = (
+                f"Convergence not achieved in {self.metadata['iterations']} iterations."
+            )
+        super().__init__(msg)
 
 
 def collect():
@@ -264,11 +272,6 @@ class CG(SparseSolver):
                     betas.append(beta)
                 alphas.append(alpha)
 
-        if i + 1 == maxiter:
-            raise ConvergenceNotAchieved(
-                f"Conjugate gradient did not converge in {self.maxiter} iterations."
-            )
-
         metadata = {
             "iterations": len(residual_norms) - 1,
             "residual norms": residual_norms,
@@ -287,6 +290,9 @@ class CG(SparseSolver):
                         betas[i - 1] ** (1 / 2) / alphas[i - 1]
                     )
             metadata["condition number estimate"] = torch.linalg.cond(lmat, p=2).item()
+
+        if i + 1 == maxiter:
+            raise ConvergenceNotAchieved(metadata)
 
         return x, metadata
 
@@ -880,21 +886,6 @@ class HybridSchwarz(SchwarzOperator):
             self.dofs_per_solver, output_size=res.shape[0]
         )
         return res.to(rhs.dtype), {}
-
-    def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
-        A_i = torch.zeros(
-            (self.n_solvers, self.dofs_per_solver, self.dofs_per_solver),
-            device=self.device,
-            dtype=self.preconditioner_precision or Ap.values().dtype,
-        )
-
-        thread_block_size = 32
-        grid_size = (Ap.size(0) + thread_block_size - 1) // thread_block_size
-        construct_local_solvers_matrices_dense_kernel[grid_size, thread_block_size](
-            self.dofs_per_solver, Ap.crow_indices(), Ap.col_indices(), Ap.values(), A_i
-        )
-
-        return A_i
 
     def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
         return gather_csr(
