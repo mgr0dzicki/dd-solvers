@@ -923,7 +923,11 @@ class HybridSchwarz(SchwarzOperator):
                         self.solvers_per_coarse_scan * self.dofs_per_solver
                     ],
                     col_indices=Ap.col_indices().clone(),
-                    values=Ap.values().clone(),
+                    values=(
+                        Ap.values().clone()
+                        if self.preconditioner_precision == Ap.dtype
+                        else Ap.values().to(self.preconditioner_precision)
+                    ),
                     size=(self.n_coarse, Ap.shape[1]),
                 )
             )

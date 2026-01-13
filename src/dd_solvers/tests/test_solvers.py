@@ -140,7 +140,8 @@ device = torch.device("cuda")
         (CG(HybridSchwarz(torch.float64, Inv(torch.float32), CUDSS())), torch.float64),
         (CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS())), torch.float64),
         (CG(HybridSchwarz(torch.float64, Inv(torch.bfloat16), CUDSS())), torch.float64),
-        # (CG(HybridSchwarz(torch.float32, LU(), CUDSS())), torch.float32),  # TODO: Why fails to converge?
+        (CG(HybridSchwarz(torch.float32, Inv(), CUDSS()), rtol=1e-6), torch.float32),
+        (CG(HybridSchwarz(torch.float32, Inv(), CUDSS()), rtol=1e-6), torch.float64),
     ],
 )
 # fmt: on
