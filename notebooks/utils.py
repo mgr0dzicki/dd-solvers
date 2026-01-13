@@ -16,33 +16,33 @@ plt.rcParams.update(
 MEASURED_BANDWIDTH = 1774
 MEASURED_BANDWIDTH_STR = "1,774GB/s"
 
+
 def extract_row_metadata(row):
-    metadata = (
-        ast.literal_eval(row["metadata"])
-        if "metadata" in row and not pd.isna(row["metadata"])
+    metadata = row["metadata"] if "metadata" in row and row["metadata"] else {}
+    setup_metadata = (
+        row["setup metadata"]
+        if "setup metadata" in row and row["setup metadata"]
         else {}
     )
-    setup_metadata = (
-        ast.literal_eval(row["setup metadata"])
-        if "setup metadata" in row and not pd.isna(row["setup metadata"])
-        else {}
+
+    solve_time = min(row["solve times"]) if row["solve times"] else None
+    solver_setup_time = (
+        min(row["solver setup times"]) if row["solver setup times"] else None
     )
 
     return pd.Series(
         {
             "iterations": metadata.get("iterations"),
-            "asm time": row.get("solve time") if "CG" not in row["solver"] else None,
-            "cg time": row.get("solve time") if "CG" in row["solver"] else None,
+            "preconditioner time": (solve_time if "CG" not in row["solver"] else None),
+            "cg time": solve_time if "CG" in row["solver"] else None,
             "local solvers time": setup_metadata.get("local solver solve time"),
             "coarse solver time": setup_metadata.get("coarse solver solve time"),
             "local solvers setup time": setup_metadata.get("local solver setup time"),
             "coarse solver setup time": setup_metadata.get("coarse solver setup time"),
-            "asm setup time": (
-                row.get("solver setup time") if "CG" not in row["solver"] else None
+            "preconditioner setup time": (
+                solver_setup_time if "CG" not in row["solver"] else None
             ),
-            "cg setup time": (
-                row.get("solver setup time") if "CG" in row["solver"] else None
-            ),
+            "cg setup time": (solver_setup_time if "CG" in row["solver"] else None),
         }
     )
 
@@ -141,10 +141,6 @@ def plot_clustered_stacked(
     return ax
 
 
-# def format_mesh(mesh: tuple[int, str]):
-#     k, m = mesh
-#     return f"\\mathcal{{{m}}}_{{{int(k)}}}"
-
 def format_mesh(mesh: str):
     if len(mesh) == 1:
         return mesh
@@ -160,3 +156,20 @@ def safe_map(func):
             return None
 
     return wrapper
+
+
+def process_experiments_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in df.columns:
+        if col.endswith("times"):
+            df[col] = df[col].apply(safe_map(ast.literal_eval))
+
+    df["metadata"] = df["metadata"].apply(safe_map(ast.literal_eval))
+    df["setup metadata"] = df["setup metadata"].apply(safe_map(ast.literal_eval))
+    df["solvers m"] = df["solvers m"].apply(lambda m: "-" if pd.isna(m) else m)
+    df["coarse m"] = df["coarse m"].apply(lambda m: "-" if pd.isna(m) else m)
+    df["p"] = df["p"].apply(int)
+    df["dim"] = df["test case"].apply(lambda t: t.split()[-1])
+
+    return df
