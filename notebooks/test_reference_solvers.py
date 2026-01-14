@@ -21,6 +21,8 @@ factory_kwargs = {
     "solution_repetitions": 10,
 }
 
+results_path = "../results/experiment_reference_solvers.csv"
+
 solvers = []
 for amg_config in AMGX.config_names:
     solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
@@ -43,6 +45,8 @@ for solver in solvers:
     )
 
 df = factory.run()
-df.to_csv(
-    f"../results/experiment_reference_solvers_d{d}_p{p}_f{fine_m}.csv", index=False
-)
+
+if os.path.exists(results_path):
+    df_existing = pd.read_csv(results_path)
+    df = pd.concat([df_existing, df], ignore_index=True)
+df.to_csv(results_path, index=False)
