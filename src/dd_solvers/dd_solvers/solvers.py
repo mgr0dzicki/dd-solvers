@@ -812,13 +812,13 @@ class AdditiveSchwarz(SchwarzOperator):
     def solve(self, rhs: torch.Tensor) -> tuple[torch.Tensor, Metadata]:
         x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
         x_i = x_lower_precision.reshape(self.n_solvers, -1)
-        y_i = self.local_solvers.solve(x_i)
+        y_i = self.local_solver.solve(x_i)
         y = y_i.flatten()
         x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
         x_c = torch.segment_reduce(
             x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
         )
-        y_c = self.coarse_solver.solve(x_c)
+        y_c, _ = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
         )
@@ -864,7 +864,7 @@ class HybridSchwarz(SchwarzOperator):
         x_c = torch.segment_reduce(
             x_c, reduce="sum", offsets=self.solvers_per_coarse_scan
         )
-        y_c = self.coarse_solver.solve(x_c)[0]
+        y_c, _ = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
         )
@@ -878,7 +878,7 @@ class HybridSchwarz(SchwarzOperator):
             x_lower_precision.reshape(self.n_solvers, -1)
         ).flatten()
         z = self.R0A @ res
-        y_c = self.coarse_solver.solve(z)[0]
+        y_c, _ = self.coarse_solver.solve(z)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
         )

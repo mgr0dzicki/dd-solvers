@@ -108,6 +108,8 @@ class ExperimentFactory:
         real_solution_fun: dolfinx.fem.Function,
     ) -> dict[str, any]:
         results = []
+        exception = None
+        exception_metadata = None
         for rep in range(self.setup_repetitions):
             try:
                 results.append(
@@ -118,8 +120,6 @@ class ExperimentFactory:
                         measure_solution_time=(rep == self.setup_repetitions - 1),
                     )
                 )
-                exception = None
-                exception_metadata = None
             except KeyboardInterrupt:
                 raise
             except Exception as e:
