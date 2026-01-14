@@ -1591,17 +1591,6 @@ half precision is used only to store the inverses of the local solvers' matrices
 while their application to batches of vectors is performed in single precision
 (see Section~\ref{sec:explicit-inverse-batch-solver}).
 
-% \begin{table}
-%   \centering
-%   \caption{Dependence of the PCG iteration count on the preconditioner precision settings.
-%   Parameters: $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
-%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$. Entries
-%   matching the double-precision results are in gray, extreme loss of
-%   convergence is highlighted in red.}
-%   \label{tab:experiment-precision-iters}
-%   \input{tables/experiment_precision_iterations.tex}
-% \end{table}
-
 By contrast, using \verb|fp32+bf16| significantly degrades convergence, requiring
 up to $2.5\times$ more iterations than \verb|fp64| in the extreme case $p=5$, $m=8$, $M=\mathcal{M}=6$.
 The comparison of the convergence behaviour for this scenario is shown in
@@ -1610,15 +1599,15 @@ and \verb|fp32+fp16| converge at the same steady rate, the \verb|fp32+bf16| run 
 to slow when the residual norm reaches approximately $10^{-5}$ and eventually
 plateaus near $10^{-9}$.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=0.65\textwidth]{precision_residuals}
-%   \caption{Euclidean norm of the residual at each PCG iteration for different
-%   preconditioner precision settings (selected case). Parameters:
-%   $d=2$, $p=5$, $\mathcal{T}_h=\mathcal{S}_8$ and
-%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_6$.}
-%   \label{fig:precision-residuals}
-% \end{figure}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{precision_residuals}
+  \caption{Euclidean norm of the residual at each PCG iteration for different
+  preconditioner precision settings (selected case). Parameters:
+  $d=2$, $p=5$, $\mathcal{T}_h=\mathcal{S}_8$ and
+  $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_6$.}
+  \label{fig:precision-residuals}
+\end{figure}
 
 These findings are consistent with the timings reported in Figure~\ref{fig:precision-plots}.
 We measured not only the total solution time but also estimated the time spent
@@ -1632,15 +1621,15 @@ of \verb|float64|. This is expected since \verb|CUDSS| employs a sparse
 decomposition algorithm that relies on reading the integer indices of the
 nonzero entries, which are unaffected by floating-point precision changes.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=\textwidth]{precision_plots}
-%   \caption{Comparison of the solution time, decomposed by component, for various
-%   problems and preconditioner precision settings. Parameters:
-%   $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
-%   $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$.}
-%   \label{fig:precision-plots}
-% \end{figure}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{precision_plots}
+  \caption{Comparison of the solution time, decomposed by component, for various
+  problems and preconditioner precision settings. Parameters:
+  $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
+  $\mathcal{T}_H=\mathcal{T}_\mathcal{H}=\mathcal{S}_\mathcal{M}$.}
+  \label{fig:precision-plots}
+\end{figure}
 
 The remainder of the ASM time -- application of the restriction and prolongation
 matrices $\bm{R_C}$ and $\bm{R_C}^T$, and summation of the solvers' contributions
