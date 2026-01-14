@@ -90,3 +90,7 @@ for coarse_m, solvers_m, fine_m_str in ms:
 
 df = factory.run()
 df.to_csv(results_path, index=False)
+
+df2 = preconditioner_factory.run()
+df_full = pd.concat([df, df2])
+df_full.to_csv(results_path, index=False)
