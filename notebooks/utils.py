@@ -39,10 +39,6 @@ def extract_row_metadata(row):
             "coarse solver time": setup_metadata.get("coarse solver solve time"),
             "local solvers setup time": setup_metadata.get("local solver setup time"),
             "coarse solver setup time": setup_metadata.get("coarse solver setup time"),
-            "preconditioner setup time": (
-                solver_setup_time if "CG" not in row["solver"] else None
-            ),
-            "cg setup time": (solver_setup_time if "CG" in row["solver"] else None),
         }
     )
 

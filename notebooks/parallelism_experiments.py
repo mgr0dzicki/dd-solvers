@@ -28,7 +28,7 @@ factory_kwargs = {
 
 preconditioner_factory_kwargs = {
     **common_kwargs,
-    "setup_repetitions": 3,
+    "setup_repetitions": 1,
     "solution_warmup_steps": 10,
     "solution_measurement_steps": 10,
     "solution_repetitions": 10,
