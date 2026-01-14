@@ -45,7 +45,7 @@ def collect():
     torch.cuda.empty_cache()
 
 
-def timeit(fun, warmup_iters=10, iters=50, repetitions=3):
+def timeit(fun, warmup_iters=10, iters=10, repetitions=20):
     times = []
     for _ in range(repetitions):
         start = torch.cuda.Event(enable_timing=True)
