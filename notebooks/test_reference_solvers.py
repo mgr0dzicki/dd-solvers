@@ -1,4 +1,6 @@
 import sys
+import os
+import pandas as pd
 from dd_solvers import *
 from experiments import *
 import torch
@@ -37,7 +39,7 @@ factory = ExperimentFactory(**factory_kwargs, mesh_family=mesh_family)
 for solver in solvers:
     factory.add(
         Experiment(
-            fine_m="S{fine_m}",
+            fine_m=f"S{fine_m}",
             solvers_m=None,
             coarse_m=None,
             solver=solver,
