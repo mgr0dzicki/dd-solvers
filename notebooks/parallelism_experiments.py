@@ -34,10 +34,13 @@ preconditioner_factory_kwargs = {
     "solution_repetitions": 10,
 }
 
-preconditioners = [
-    AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()),
-    HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()),
-]
+
+def preconditioners(**kwargs):
+    return [
+        AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS(), **kwargs),
+        HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS(), **kwargs),
+    ]
+
 
 results_path = f"../results/experiment_parallelism_d{d}_p{p}_f{fine_m}.csv"
 print("results path: ", results_path)
@@ -69,7 +72,7 @@ ms_mixed = [
 ms = ms_simp + ms_cub + ms_mixed
 
 for coarse_m, solvers_m, fine_m_str in ms:
-    for preconditioner in preconditioners:
+    for preconditioner in preconditioners():
         factory.add(
             Experiment(
                 coarse_m=coarse_m,
@@ -78,6 +81,7 @@ for coarse_m, solvers_m, fine_m_str in ms:
                 solver=CG(preconditioner, **cg_kwargs),
             )
         )
+    for preconditioner in preconditioners(collect_timings=True):
         preconditioner_factory.add(
             Experiment(
                 coarse_m=coarse_m,
