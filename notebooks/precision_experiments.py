@@ -35,11 +35,9 @@ preconditioner_args_combinations = [
 experiments = [
     # (d, p, fine_m)
     (2, 1, 10),
+    (2, 1, 11),
     (2, 3, 9),
     (2, 5, 8),
-    (3, 1, 6),
-    (3, 2, 5),
-    (3, 3, 4),
 ]
 
 results_path = "../results/experiment_precisions.csv"
