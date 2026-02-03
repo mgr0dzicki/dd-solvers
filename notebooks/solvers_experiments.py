@@ -23,14 +23,6 @@ factory_kwargs = {
     "solution_repetitions": 10,
 }
 
-asm_factory_kwargs = {
-    **factory_kwargs,
-    "setup_repetitions": 3,
-    "solution_warmup_steps": 10,
-    "solution_measurement_steps": 10,
-    "solution_repetitions": 10,
-}
-
 solvers = [
     CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
     CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
