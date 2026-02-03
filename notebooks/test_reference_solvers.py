@@ -8,7 +8,7 @@ import torch
 d = int(sys.argv[1])
 p = int(sys.argv[2])
 fine_m = int(sys.argv[3])
-solvers = sys.argv[4].split(",") if len(sys.argv) > 4 else ["amgx", "cudss"]
+solver_names = sys.argv[4].split(",") if len(sys.argv) > 4 else ["amgx", "cudss"]
 
 cg_kwargs = {
     "maxiter": 1200,
@@ -28,13 +28,13 @@ results_path = "../results/experiment_reference_solvers.csv"
 
 solvers = []
 
-if "amgx" in solvers:
+if "amgx" in solver_names:
     for amg_config in AMGX.config_names:
         solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
 
 # Should be the last one as it can leave the GPU memory in an inconsistent
 # state in case of OOM errors.
-if "cudss" in solvers:
+if "cudss" in solver_names:
     solvers.append(CUDSS())
 
 if not solvers:
