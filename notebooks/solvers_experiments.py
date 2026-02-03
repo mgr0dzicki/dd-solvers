@@ -1,4 +1,5 @@
 import sys
+import os
 from dd_solvers import *
 from experiments import *
 import torch
@@ -35,10 +36,8 @@ solvers = [
     CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
 ]
 
-results_path = f"../results/experiment_solvers_d{d}_p{p}_f{fine_m}.csv"
-print("results path: ", results_path)
+results_path = f"../results/experiment_solvers.csv"
 
-print("Generating mesh family...")
 mesh_family = UniformMeshes(d=d, m=fine_m)
 factory = ExperimentFactory(**factory_kwargs, mesh_family=mesh_family)
 
@@ -72,4 +71,8 @@ for coarse_m, solvers_m, fine_m_str in ms:
         )
 
 df = factory.run()
+
+if os.path.exists(results_path):
+    df_existing = pd.read_csv(results_path)
+    df = pd.concat([df_existing, df], ignore_index=True)
 df.to_csv(results_path, index=False)
