@@ -807,7 +807,7 @@ to \verb|None| (default) yields an unpreconditioned CG solver.
 The implementation is described in Section~\ref{sec:cg-method}.
 
 In \verb|CUDSS| solver we provide a Python interface (with a C++ backend) to
-the NVIDIA cuDSS library (v0.7.1\todo{sprawdz wersje})~\cite{cudss}, which
+the NVIDIA cuDSS library (v0.7.1)~\cite{cudss}, which
 is a a high-performance direct sparse solver. As \verb|CUDSS| implements the \texttt{SparseSolver}
 interface, it can be used either as the coarse solver within \texttt{SchwarzOperator}
 or as a~standalone solver for \eqref{auf}.
