@@ -1049,7 +1049,11 @@ class AMGX(SparseSolver):
             },
         },
     }
-    config_names = list(_configs.keys())
+    preconditioner_config_names = [
+        config_name
+        for config_name in _configs.keys()
+        if not config_name.startswith("CG_")
+    ]
 
     def __init__(self, config_name: str, precision: torch.dtype | None = None):
         self.config_name = config_name

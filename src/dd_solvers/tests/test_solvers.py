@@ -117,6 +117,7 @@ device = torch.device("cuda")
     [
         (CUDSS(), torch.float32),
         (CUDSS(), torch.float64),
+        (AMGX("CG_L1_TRUNC"), torch.float64),
         (CG(bsr_matmul=False), torch.float32),
         (CG(bsr_matmul=True), torch.float64),
         (CG(AMGX("AGGRESIVE_L1")), torch.float64),

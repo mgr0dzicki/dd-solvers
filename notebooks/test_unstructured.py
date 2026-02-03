@@ -23,7 +23,7 @@ factory_kwargs = {
 }
 
 ref_solvers = []
-for amg_config in AMGX.config_names:
+for amg_config in AMGX.preconditioner_config_names:
     ref_solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
 
 schwarz_solvers = [
