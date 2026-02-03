@@ -743,7 +743,7 @@ framework~\cite{pytorch,pytorch2} for GPU-accelerated linear algebra operations.
 This makes the implementation concise, free from memory management issues
 and transportable across different hardware platforms supported by PyTorch.
 Only when PyTorch operations prove insufficient, we implement custom CUDA kernels.
-We use CUDA C++ \cite[Chapter 6]{cuda-guide} to
+We use CUDA C++ \cite[Chapter 3]{cuda-guide} to
 implement the batched dense matrix\nobreakdash-vector product
 (see Section~\ref{sec:batched-dense-matrix-vector-product}),
 since it requires careful handling of type casting and direct calls to
@@ -1178,13 +1178,13 @@ and RPT-S otherwise.
 
 \subsection{BSR Matrix-Vector Product}
 
-The per-iteration cost of the PCG method is dominated by the preconditioner
-solve and the matrix-vector product. The latter can become
+The per-iteration cost of the PCG method is dominated by two operations:
+the preconditioner solve and the sparse matrix-vector product. The latter can become
 the most expensive step when using a lightweight preconditioner (such as massively
-parallel variant of the Schwarz preconditioner) as confirmed by our benchmarks.
+parallel variant of the Schwarz method), as confirmed by our benchmarks.
 
-We therefore optimize the computation of $\bm{A}\bm{p}$ by exploiting the block structure of the
-stiffness matrix $\bm{A}$. If the unknowns associated with each element
+We therefore optimize the computation of the product with the stiffness matrix $\bm{A}$
+by exploiting its structure. If the unknowns associated with each element
 form a sequence of consecutive entries (which is assured by the proper permutation), then the
 matrix $\bm{A}$ has a block-sparse structure, with block size $b$ equal to the number
 of unknowns per element. Specifically, the nonzero entries of $\bm{A}$ can be grouped
@@ -1204,11 +1204,11 @@ cuSPARSE library, which is accessible via a PyTorch
 interface. However, in our benchmarks it underperformed the CSR matrix-vector
 product from the same library.
 To improve performance, we implemented (in CUDA kernels)
-four algorithms from~\cite{bsr-mv}: block-by-block (b-by-b),
-column-by-column (c-by-c), row\nobreakdash-per\nobreakdash-thread without synchronization (RPT) and
+four algorithms from~\cite{bsr-mv}: block-by-block,
+column-by-column, row\nobreakdash-per\nobreakdash-thread without synchronization (RPT) and
 row-per-thread with synchronization (RPT-S). Reductions in the block-by-block and
-column-by-column kernels use warp-shuffle operations \cite[Section 10.22]{cusparse}.
-All implemented kernels
+column\nobreakdash-by\nobreakdash-column kernels use warp-shuffle operations
+\cite[Section 7.22]{cuda-guide}. All implemented kernels
 run on a one-dimensional grid, with block size 32 for the RPT and RPT-S
 kernels, and an experimentally chosen 256 for the block-by-block and column\nobreakdash-by\nobreakdash-column
 kernels.
@@ -1221,7 +1221,7 @@ The blocks of $A.values$ are assumed to be stored in column-major order
 within each block (cf. line 10), which follows~\cite{bsr-mv} and ensures
 coalesced memory accesses. The algorithm computes the matrix-vector product
 $Ax$ and stores the result in the $global\_out$ array. The RPT-I kernel likewise
-executes on a one-dimensional grid but uses a~block size of 256.
+executes on a one-dimensional grid and uses a~block size of 256 threads.
 
 \begin{algorithm}
   \caption{BSR matrix-vector product -- RPT-I kernel}
@@ -1243,40 +1243,44 @@ executes on a one-dimensional grid but uses a~block size of 256.
   $global\_out[target\_row] \gets local\_out$
 \end{algorithm}
 
-All variants were benchmarked on stiffness matrices for
-several model problems of different sizes, with polynomial degress $p=1,...,5$ in 2D and $p=1,2,3$
-in 3D case. The indices were stored as 32-bit integers in all cases, while the
-data type of the matrix entries (and the whole computation) was either 32-bit
-or 64-bit floating point. The time was measured on an NVIDIA A100 GPU.
-% Results appear in Table~\ref{tab:bsr-mv-benchmark}.
+All algorithms were benchmarked using stiffness matrices produced
+by the Discontinuous Galerkin discretization described in Section~\ref{sec:discretization}.
+We tested polynomial degrees $p=1,...,5$ in 2D and $p=1,2,3$ in 3D, yielding
+block sizes ranging from $3$ to $21$. Indices were stored as 32-bit integers,
+while matrix entries and all computations used 64-bit floating-point precision.
+Throughput was measured on an NVIDIA A100 GPU and, as before, compared to the peak
+memory bandwidth measured with
+the \verb|triad| benchmark from the BabelStream suite \cite{babelstream}.
+The results are shown in in Figure~\ref{fig:bsrmv_memory_throughput}.
 
 \begin{figure}
   \centering
   \includesvg[width=\textwidth]{bsrmv_memory_throughput}
   \caption{Performance of our implementations of the BSR matrix-vector
-  product for various stiffness matrices. Block-by-block algorithm requires
+  product for various discretization parameters. Block-by-block algorithm requires
   $b\leq 5$.}
   \label{fig:bsrmv_memory_throughput}
 \end{figure}
 
-The benchmarks demonstrate that the time of the matrix-vector product can be
-significantly reduced by using BSR format, with the best speedups reaching
-up to $2\times$ in single precision and $1.73\times$ in double precision.
-While there is no algorithm that consistently outperforms CSR in every scenario,
-the best overall results are achieved by the RPT-I algorithm.
-It is only outperformed by CSR on small problems with $b=3$ and by RPT-S when
-$b$ is large (15 or 21) in double precision. Both block-by-block and column-by\nobreakdash-column
-perform poorly on our hardware, likely due to architectural
-differences from the Kepler GPUs used in \cite{bsr-mv}. The cuSPARSE BSR routine
-is competitive only at $b=4$, where RPT-I is still the fastest one. Note that
-our comparison focuses on problems with more than three million unknowns; results
-for smaller systems may differ.
+The \texttt{cusparse<t>bsrmv} routine, which we use as a baseline, was competetive
+only for $b=4$ and $b=15$. In the remaining cases it performed poorly, being as much as
+$2.68\times$ slower than our implementations.
+We suspect that the cuSPARSE algorithm is optimized for block sizes being
+close to powers of two, and is therefore not well suited for our use case.
 
-Since the experiments in Chapter~\ref{chap:experiments} are run on
-an A100 GPU and use double precision (fp64), we adopt the following heuristic
--- based on the benchmarks presented --
-to select the BSR matrix\nobreakdash-vector product algorithm:
-if $b<15$ use RPT-I, otherwise  use RPT-S.
+Relative performance of the algorithms
+introduced in \cite{bsr-mv} (block-by-block, column-by\nobreakdash-column, RPT and RPT-S),
+agrees with the conclusions reported there. Absolute throughput numbers
+are substantially higher than in \cite{bsr-mv}, as expected given the Kepler
+hardware used in that study versus much more advanced Ampere architecture
+of the A100 GPU employed here. Nevertheless,
+on the A100 all these algorithms are outperformed by the straightforward
+RPT\nobreakdash-I approach, which is the fastest method for all tested scenarios.
+In addition, it attains very high memory throughput, ranging from $77\%$ to $92\%$
+of the measured A100 peak bandwidth. Combined with the memory savings
+of the BSR format, this yields a $1.42-1.69\times$ speedup over the
+CSR matrix-vector product from cuSPARSE. For these reasons, we use the BSR format
+and the RPT-I algorithm as the default configuration in our PCG implementation.
 
 \subsection{Reference AmgX Preconditioner}
 \label{sec:amgx-preconditioner}
@@ -1429,7 +1433,7 @@ might be used internally by the preconditioner according to the choice of
 its parameters (see Section~\ref{sec:solvers-overview}).
 
 The GPU we use to run all experiments in this chapter is an NVIDIA A100 SXM4 80GB.
-We use CUDA Events \cite[Section 6.2.8.8]{cuda-guide} to measure GPU timings.
+We use CUDA Events \cite[Section 3.2.8.8]{cuda-guide} to measure GPU timings.
 The general measurement procedure is as follows. We perform $N$ rounds, each
 consisting of $K$ consecutive runs of the measured phase and record the total
 time of each round independently. For each round we compute the per-run time
