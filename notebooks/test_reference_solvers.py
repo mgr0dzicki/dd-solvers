@@ -8,6 +8,7 @@ import torch
 d = int(sys.argv[1])
 p = int(sys.argv[2])
 fine_m = int(sys.argv[3])
+solvers = sys.argv[4].split(",") if len(sys.argv) > 4 else ["amgx", "cudss"]
 
 cg_kwargs = {
     "maxiter": 1200,
@@ -26,12 +27,18 @@ factory_kwargs = {
 results_path = "../results/experiment_reference_solvers.csv"
 
 solvers = []
-for amg_config in AMGX.config_names:
-    solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
+
+if "amgx" in solvers:
+    for amg_config in AMGX.config_names:
+        solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
 
 # Should be the last one as it can leave the GPU memory in an inconsistent
-# state in case of OOM
-solvers.append(CUDSS())
+# state in case of OOM errors.
+if "cudss" in solvers:
+    solvers.append(CUDSS())
+
+if not solvers:
+    raise ValueError("No solvers specified!")
 
 mesh_family = UniformMeshes(d=d, m=fine_m)
 
