@@ -834,7 +834,7 @@ via the \verb|pyamgx| bindings~\cite{pyamgx} and is provided by the \texttt{AMGX
 in our package. Configuration details are discussed
 in Section \ref{sec:amgx-preconditioner}.
 
-As will be later demonstrated in Chapter~\ref{chap:experiments}, applying the preconditioner
+As will be later demonstrated in Section~\ref{chap:experiments}, applying the preconditioner
 in lower precision than the original matrix can deliver a significant performance
 improvement. Accordingly, we supplement the Schwarz
 preconditioners with two levels of precision control. First, the \texttt{precision}
@@ -1282,73 +1282,6 @@ of the BSR format, this yields a $1.42-1.69\times$ speedup over the
 CSR matrix-vector product from cuSPARSE. For these reasons, we use the BSR format
 and the RPT-I algorithm as the default configuration in our PCG implementation.
 
-\subsection{Reference AmgX Preconditioner}
-\label{sec:amgx-preconditioner}
-
-AmgX \cite{amgx, amgx-reference} is a high-performance NVIDIA library for solving
-large sparse linear systems on NVIDIA GPUs. It provides a variety of
-algebraic multigrid (AMG) preconditioners and Krylov subspace solvers which
-can be flexibly combined and configured. Due to the large number of possible configurations,
-careful selection is necessary to achieve optimal performance for a given problem
-and, in our case, to ensure a "fair" comparison with our ASM implementation.
-
-We followed the procedure below to select an AmgX configuration. Starting from all
-example configurations provided with AmgX (\verb|AMGX/src/configs|), we modified any that used
-GMRES or FGMRES to use PCG instead, and employed a stopping criterion that reduces
-the initial Euclidean norm of the residual by a factor of $10^9$. Benchmarks
-used system \eqref{auf} obtained for $p=1$ and $\mathcal{T}_h$ being a uniform
-simplicial mesh ($\mathcal{S}_m^d$) of a unit square ($d=2$) or a~unit cube ($d=3$);
-see Section~\ref{sec:experimental-setup} for details on the meshes.
-
-We first tested small problems: 12k DoFs in 2D and 25k DoFs in 3D
-($\mathcal{T}_h\in \{\mathcal{S}_6^2, \mathcal{S}_3^3\}$), to identify
-configurations that successfully converge. We then benchmarked the convergent configurations
-on medium problems: 393k DoFs in 2D and 197k DoFs in 3D
-($\mathcal{T}_h\in \{\mathcal{S}_8^2, \mathcal{S}_5^3\}$), and retained those
-that were at most 50\% slower than the fastest one in each dimension.
-Finally, we ran the selected configurations on large problems:
-25M DoFs in 2D and 50M DoFs in 3D ($\mathcal{T}_h\in \{\mathcal{S}_{11}^2, \mathcal{S}_7^3\}$).
-The configuration named \verb|GMRES_AMG_D2| and all configurations that
-used the HMIS coarsening selector were excluded as they produced runtime errors
-on the large 3D problem.  This left four configurations (the same set in both dimensions),
-which we list in Tables~\ref{tab:2d-amgx-configs} and~\ref{tab:3d-amgx-configs}.
-
-% \begin{table}
-%   \centering
-%   \caption{Performance of AmgX configurations on A100: 2D problem with 25M DOFs.}
-%   \label{tab:2d-amgx-configs}
-%   \input{tables/amgx_2d.tex}
-% \end{table}
-
-% \begin{table}
-%   \centering
-%   \caption{Performance of AmgX configurations on A100: 3D problem with 50M DOFs.}
-%   \label{tab:3d-amgx-configs}
-%   \input{tables/amgx_3d.tex}
-% \end{table}
-
-All selected configurations employ a classical algebraic multigrid preconditioner
-with a~V\nobreakdash-cycle and parallel coarsening algorithm (PMIS). They differ
-in the choice of smoother and interpolation operator. See the AmgX
-documentation \cite{amgx-reference} for details on these options and their
-parameters. \verb|AMG_CLASSICAL_AGGRESSIVE_L1| is the fastest configuration in both
-dimensions, but we retain all four for the experiments in
-Chapter~\ref{chap:experiments}, since those scenarios include larger $p$
-and mixed-precision arithmetic, which may affect the relative performance of
-the configurations.
-Note that we did not further tune AmgX settings here; additional performance
-gains may be possible through parameter optimization.
-
-The preconditioners used in the selected configurations are exposed in the
-\verb|dd_solvers| module via the \verb|AmgX| class. Its constructor accepts
-a configuration name, which might be one of
-\verb|AGGRESSIVE_L1|, \verb|L1_TRUNC|, \verb|AGGRESSIVE_L1_TRUNC|, or
-\verb|AGGRESSIVE_CHEB_L1_TRUNC| (we omit the common \verb|AMG_CLASSICAL_| prefix
-for brevity). Using \verb|AMGX| together with our \verb|CG| class
-corresponds to the original AmgX configurations listed in
-Tables~\ref{tab:2d-amgx-configs} and~\ref{tab:3d-amgx-configs}, except that the
-AmgX PCG solver is replaced by our PCG implementation.
-
 \section{Parameter Tuning and Performance Evaluation}
 \label{chap:experiments}
 
@@ -1714,15 +1647,67 @@ constraints and were therefore left outside the scope of this thesis.
 \label{sec:experiments-amgx-comparison}
 
 We conclude the experimental evaluation by comparing the performance
-of our ASM implementation with the algebraic multigrid preconditioners
-provided by NVIDIA AmgX (see Section~\ref{sec:amgx-preconditioner}).
-To ensure a fair comparison, we use our PCG implementation
-with each preconditioner and measure the total solution time required
-to reduce the initial Euclidean norm of the residual by a~factor of $10^9$.
-The ASM preconditioner is applied in single precision and tested only with
-\verb|Inv(float16)| and \verb|Inv()| as local solvers, in accordance with
-the results of the previous sections. Since AmgX also benefits from mixed
-precision, its preconditioners are applied in single precision as well.
+of our solvers with the algebraic multigrid (AMG) preconditioners
+provided by AmgX \cite{amgx, amgx-reference}, a high-performance
+NVIDIA library for solving large sparse linear systems on NVIDIA GPUs.
+Due to the large number of parameters available in AmgX,
+careful tuning is necessary to achieve optimal performance for a given problem
+and, in our case, to ensure a "fair" comparison. For this reason, we provide
+a detailed description of our setup of the AmgX preconditioner
+in Section~\ref{sec:amgx-configuration},
+before reporting the results in Section~\ref{sec:amgx-comparison-results}.
+
+\subsubsection{AmgX Configuration}
+\label{sec:amgx-configuration}
+
+We followed the procedure below to select an AmgX configuration. Starting from all
+example configurations provided with AmgX (\verb|AMGX/src/configs|), we modified any that used
+GMRES or FGMRES to use PCG instead, and employed a stopping criterion that reduces
+the initial Euclidean norm of the residual by a factor of $10^9$. Benchmarks
+used system \eqref{auf} obtained for $p=1$ and $\mathcal{T}_h$ being a uniform
+simplicial mesh ($\mathcal{S}_m^d$) of a unit square ($d=2$) or a~unit cube ($d=3$);
+see Section~\ref{sec:experimental-setup} for details on the meshes.
+
+We first tested small problems: 12k DoFs in 2D and 25k DoFs in 3D
+($\mathcal{T}_h\in \{\mathcal{S}_6^2, \mathcal{S}_3^3\}$), to identify
+configurations that successfully converge. We then benchmarked the convergent configurations
+on medium problems: 393k DoFs in 2D and 197k DoFs in 3D
+($\mathcal{T}_h\in \{\mathcal{S}_8^2, \mathcal{S}_5^3\}$), and retained those
+that were at most 50\% slower than the fastest one in each dimension.
+Finally, we ran the selected configurations on large problems:
+25M DoFs in 2D and 50M DoFs in 3D ($\mathcal{T}_h\in \{\mathcal{S}_{11}^2, \mathcal{S}_7^3\}$).
+The configuration named \verb|GMRES_AMG_D2| and all configurations that
+used the HMIS coarsening selector were excluded as they produced runtime errors
+on the large 3D problem. This left four configurations (the same set in both dimensions):
+\begin{itemize}
+  \item \verb|AMG_CLASSICAL_L1_TRUNC|,
+  \item \verb|AMG_CLASSICAL_AGGRESSIVE_L1|,
+  \item \verb|AMG_CLASSICAL_AGGRESSIVE_L1_TRUNC|,
+  \item \verb|AMG_CLASSICAL_AGGRESSIVE_CHEB_L1_TRUNC|.
+\end{itemize}
+
+All selected configurations employ a classical algebraic multigrid preconditioner
+with a~V\nobreakdash-cycle and parallel coarsening algorithm (PMIS). They differ
+in the choice of smoother and interpolation operator. See the AmgX
+documentation \cite{amgx-reference} for details on these options and their
+parameters. The relative performance of the listed configurations was different
+in 2D and 3D, and we expected more variation for larger $p$ and mixed-precision arithmetic.
+For this reason, we retain all four configurations for the performance comparison
+and report the best result among them for each test case.
+Note that we did not further tune AmgX settings here; additional performance
+gains may be possible through parameter optimization.
+
+AmgX might be used to build a complete solver, as it provides implementations
+of Krylov methods, including PCG. However, it does not support mixed-precision
+computations and BSR matrix-vector product in combination with classical AMG.
+Moreover, our primary interest is in comparing the preconditioners themselves,
+rather than the implementations of the PCG method. Therefore we decided
+to accelerate AmgX preconditioners using our PCG implementation.
+
+To make sure this does not degrade AmgX performance, we...
+
+\subsubsection{Results}
+\label{sec:amgx-comparison-results}
 
 Results for several model problems with different $d$ and $p$ are reported
 in Table~\ref{tab:experiment-speedups}. Note that we use coarser $\mathcal{T}_h$
