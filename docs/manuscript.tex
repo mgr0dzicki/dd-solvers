@@ -1650,10 +1650,10 @@ We conclude the experimental evaluation by comparing the performance
 of our solvers with the algebraic multigrid (AMG) preconditioners
 provided by AmgX \cite{amgx, amgx-reference}, a high-performance
 NVIDIA library for solving large sparse linear systems on NVIDIA GPUs.
-Due to the large number of parameters available in AmgX,
-careful tuning is necessary to achieve optimal performance for a given problem
-and, in our case, to ensure a "fair" comparison. For this reason, we provide
-a detailed description of our setup of the AmgX preconditioner
+Because AmgX exposes a large number of configurable parameters,
+careful tuning is required to obtain optimal performance for a given problem
+and, in our case, to ensure a "fair" comparison. For this reason, we give
+a detailed description of our AmgX setup
 in Section~\ref{sec:amgx-configuration},
 before reporting the results in Section~\ref{sec:amgx-comparison-results}.
 
@@ -1690,31 +1690,53 @@ All selected configurations employ a classical algebraic multigrid preconditione
 with a~V\nobreakdash-cycle and parallel coarsening algorithm (PMIS). They differ
 in the choice of smoother and interpolation operator. See the AmgX
 documentation \cite{amgx-reference} for details on these options and their
-parameters. The relative performance of the listed configurations was different
-in 2D and 3D, and we expected more variation for larger $p$ and mixed-precision arithmetic.
-For this reason, we retain all four configurations for the performance comparison
+parameters. The relative performance of the listed configurations varied
+between 2D and 3D problems, and we expected even greater variation for larger
+polynomial degree $p$ and mixed-precision arithmetic.
+For this reason, we include all four configurations in the performance comparison
 and report the best result among them for each test case.
 Note that we did not further tune AmgX settings here; additional performance
 gains may be possible through parameter optimization.
 
-AmgX might be used to build a complete solver, as it provides implementations
-of Krylov methods, including PCG. However, it does not support mixed-precision
-computations and BSR matrix-vector product in combination with classical AMG.
-Moreover, our primary interest is in comparing the preconditioners themselves,
-rather than the implementations of the PCG method. Therefore we decided
-to accelerate AmgX preconditioners using our PCG implementation.
+AmgX can be used to build a complete solver, as it implements several Krylov
+methods, including PCG. However, it does not support mixed-precision
+computations or BSR matrix-vector product in combination with classical AMG.
+Furthermore, our primary interest is in comparing the preconditioners themselves
+rather than different PCG implementations. Therefore we decided
+to accelerate AmgX in the same way as our Schwarz preconditioners -- by
+combining them with our customized PCG implementation.
 
-To make sure this does not degrade AmgX performance, we...
+To ensure this did not degrade AmgX performance, we compared the
+\verb|L1_TRUNC| preconditioner run with AmgX PCG against various configurations
+of our PCG implementation. As usual, we measured the time required to reduce
+the initial Euclidean norm of the residual by a factor of $10^9$. Our performance
+metric is the \emph{throughput}, defined as the problem size (in DoFs) divided
+by the total solution time. The results for $d=2$ and $p=3$ are shown in
+Figure~\ref{fig:amgx-pcg-throughput}.
 
 \begin{figure}
   \centering
   \includesvg[width=0.8\textwidth]{amgx_pcg_throughput}
-  \caption{Comparison of AmgX with different PCG variants.}
+  \caption{Throughput of the AmgX preconditioner
+  \texttt{L1\_TRUNC} across various PCG configurations.
+  Parameters: $d=2$, $p=3$ and $\mathcal{T}_h=\mathcal{S}_m$.}
   \label{fig:amgx-pcg-throughput}
 \end{figure}
 
+For small problems our PCG implementation is slower than AmgX, owing to overheads
+from PyTorch and Python layers. Additional degradation occur when using BSR format,
+as our matrix-vector kernels are written in Numba and thus incur additional launching overhead.
+However, as the problem size grows, these overheads become negligible,
+and the throughput of AmgX PCG and our equivalent variant (fp64, CSR)
+is nearly identical. Moreover, enabling mixed precision and using BSR format yields
+further improvements. The BSR format -- while particularly beneficial for Schwarz operators
+-- provides limited gains here, because the cost of applying the AmgX preconditioner
+dominates the cost of the matrix-vector product. Nevertheless, combining
+mixed precision and BSR yields a $1.58\times$ speedup over AmgX PCG.
+This validates our choice to pair AmgX preconditioners with our PCG implementation
+when comparing with Schwarz preconditioners.
 
-\subsubsection{Results}
+\subsubsection{Comparison Results}
 \label{sec:amgx-comparison-results}
 
 Results for several model problems with different $d$ and $p$ are reported
