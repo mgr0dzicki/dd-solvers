@@ -7,8 +7,10 @@ The repository is organized as follows:
     components, as well as the Preconditioned Conjugate Gradient method.
   - `experiments/`: Provides utility functions for mesh generation, problem setup,
     and running experiments.
-- `notebooks/`: Contains Jupyter notebooks and Python scripts reproducing the
-  specific experiments described in the thesis and processing the results.
+- `experiments/`: Contains Jupyter notebooks and Python scripts reproducing the
+  specific experiments described in the thesis.
 - `results/`: Stores the results generated from experiments.
+- `notebooks/`: Contains additional Jupyter notebooks for exploratory analysis
+  and visualization, i.e. producing figures for the thesis.
 - `containers/`: Includes source files for building Docker images to ensure
   a consistent execution environment.
