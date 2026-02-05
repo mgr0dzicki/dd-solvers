@@ -1383,8 +1383,8 @@ The general measurement procedure is as follows. We perform $N$ rounds, each
 consisting of $K$ consecutive runs of the measured phase and record the total
 time of each round independently. For each round we compute the per-run time
 as the round time divided by $K$, and we report the minimum per-run time over
-all rounds. We always use $N=10$ and select $K$ depending on the execution
-time of the measured phase.
+all rounds. The parameters $N$ and $K$ are selected based on the expected
+duration of the measured phase.
 
 Our primary metric in this section is the \emph{solution time} of the system \eqref{auf},
 defined as the time required to reduce the Euclidean norm of the initial residual
@@ -1399,57 +1399,55 @@ ratio of the number of unknowns to the solution time (measured in DoF/s).
 \subsection{Exploiting Mixed Precision}
 \label{sec:precision-experiments}
 
-In this section we study the effectiveness of solving the linear system \eqref{auf}
+We begin by evaluating the effectiveness of solving the linear system \eqref{auf}
 using \emph{mixed precision}: PCG iteration is executed in double precision
-to preserve accuracy, while the ASM preconditioner uses lower precisions internally
-to accelerate the computation. We test this approach on three discrete systems,
-obtained for $d=2$ and $(p, \mathcal{T}_h)\in \{(1, \mathcal{S}_{10}), (3, \mathcal{S}_9),
-(5, \mathcal{S}_8)\}$. For each case we take
+to preserve accuracy, while the Schwarz preconditioner employs lower precisions
+internally to accelerate the computation.
+
+Both the additive and hybrid Schwarz preconditioners provide two levels of precision
+control. First, the precision of all intermediate vectors computed within the preconditioner
+application can be set to either double (\verb|float64|) or single (\verb|float32|).
+Second, the inverses of the local solvers' matrices may be stored in one of four
+precisions: double (\verb|float64|), single (\verb|float32|), half (\verb|float16|)
+or brain floating point (\verb|bfloat16|); see Section~\ref{sec:explicit-inverse-batch-solver}.
+Since local solvers are not permitted to use higher precision than the preconditioner itself,
+this yields seven configurations listed in Table~\ref{tab:precision-configurations}.
+We tested all of them on three discrete systems,
+obtained for $d=2$, $\mathcal{T}_h=\mathcal{S}_m$ and
+$(p, m)\in \{(1, 10), (3, 9), (5, 8)\}$. For each case we set
 $\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}=\mathcal{S}_\mathcal{M}$ with
 $m-2\leq \mathcal{M}\leq m$.
 
-We use \verb|Inv| as the local solver, as it offers most flexibility for precision
-control. There are four possible configurations
-(Listing~\ref{lst:precision-experiments-solvers}): the entire ASM preconditioner
-in double precision (\verb|fp64|), in single precision (\verb|fp32|)
-and in single precision with the local solvers using 16-bit types
-(\verb|fp32+fp16| or \verb|fp32+bf16|).
+\begin{table}
+  \centering
+  \caption{Possible precision configurations for the Schwarz preconditioners.}
+  \label{tab:precision-configurations}
+  \begin{tabular}{lrr}
+    \toprule
+    Configuration & Preconditioner & Local solvers' matrices \\
+    \midrule
+    \verb|fp64| & \verb|float64| & \verb|float64| \\
+    \verb|fp64+fp32| & \verb|float64| & \verb|float32| \\
+    \verb|fp64+fp16| & \verb|float64| & \verb|float16| \\
+    \verb|fp64+bf16| & \verb|float64| & \verb|bfloat16| \\
+    \verb|fp32| & \verb|float32| & \verb|float32| \\
+    \verb|fp32+fp16| & \verb|float32| & \verb|float16| \\
+    \verb|fp32+bf16| & \verb|float32| & \verb|bfloat16| \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-\begin{algorithm}
-\vspace{-3pt}
-\begin{lstlisting}[
-  caption={Solvers used in the mixed-precision experiments.},
-  label={lst:precision-experiments-solvers},
-  style=Python
-]
-CG(preconditioner, rtol=1e-9)
-for preconditioner in (
-  ASM(torch.float64, Inv(torch.float32), CUDSS()),   # fp64
-  ASM(torch.float32, Inv(torch.float32), CUDSS()),   # fp32
-  ASM(torch.float32, Inv(torch.float16), CUDSS()),   # fp32+fp16
-  ASM(torch.float32, Inv(torch.bfloat16), CUDSS()),  # fp32+bf16
-)
-\end{lstlisting}
-\vspace{-3pt}
-\end{algorithm}
-
-PCG iteration counts required to reduce the initial Euclidean norm of the
-residual by a~factor of $10^9$ are reported in
-Table~\ref{tab:experiment-precision-iters}. Using \verb|fp32|
-did not change the number of iterations except in one case ($p=5$, $m=8$, $M=\mathcal{M}=6$).
-The \verb|fp32+fp16| configuration added at most a few iterations for $p=3$ and $p=5$.
-We attribute such good behaviour of the \verb|fp32+fp16| variant to the fact that
-half precision is used only to store the inverses of the local solvers' matrices,
-while their application to batches of vectors is performed in single precision
-(see Section~\ref{sec:explicit-inverse-batch-solver}).
-
-By contrast, using \verb|fp32+bf16| significantly degrades convergence, requiring
-up to $2.5\times$ more iterations than \verb|fp64| in the extreme case $p=5$, $m=8$, $M=\mathcal{M}=6$.
-The comparison of the convergence behaviour for this scenario is shown in
-Figure~\ref{fig:precision-residuals}. While \verb|fp64|, \verb|fp32|
-and \verb|fp32+fp16| converge at the same steady rate, the \verb|fp32+bf16| run begins
-to slow when the residual norm reaches approximately $10^{-5}$ and eventually
-plateaus near $10^{-9}$.
+We first discuss the impact of precision settings on PCG convergence.
+The hybrid operator with single-precision variants
+(\verb|fp32|, \verb|fp32+fp16| and \verb|fp32+bf16|) failed to reach the
+desired residual reduction in all tested scenarios.
+The convergence behaviour for the selected test case is shown in the right
+panel of Figure~\ref{fig:precision-residuals}. While the
+double-precision variants converge steadily at the same rate, the single-precision
+runs stagnate at residual norms of approximately $10^{-3}$. We suspect
+this is caused by elimination of the initial projection step in the hybrid
+preconditioner (see Section~\ref{sec:preconditioner-alg}), which makes it
+more sensitive to precision reduction.
 
 \begin{figure}
   \centering
@@ -1461,17 +1459,25 @@ plateaus near $10^{-9}$.
   \label{fig:precision-residuals}
 \end{figure}
 
-These findings are consistent with the timings reported in Figure~\ref{fig:precision-plots}.
+Another problematic configuration is the additive operator with \verb|fp32+bf16|,
+which required $2.5\times$ more iterations than \verb|fp64| in the extreme case $p=5$,
+$m=8$, $M=\mathcal{M}=6$. The comparison of the convergence behaviour for this
+scenario is shown in the left panel of Figure~\ref{fig:precision-residuals}. While
+all other variants converge at similar rates, the \verb|fp64+bf16| run begins
+to slow when the residual norm reaches approximately $10^{-5}$ and eventually
+plateaus near $10^{-9}$.
+
+Other mixed-precision configurations show none or only minor increases in iteration
+counts compared with the double-precision baseline. Notably, the
+\verb|fp32+fp16| variant, which is the most aggressive in terms of precision reduction,
+performs very well in this regard. We attribute this to the fact that
+half precision is used only to store the inverses of the local solvers' matrices,
+whereas their application to batches of vectors is performed in single precision.
+
+Next, we examine the impact of precision settings on solver performance.
 We measured not only the total solution time but also estimated the time spent
-in each ASM component by timing them independently and scaling by the number of
-PCG iterations. Local solvers benefit substantially from lower precision,
-with speedups of $1.75 - 1.96\times$ for \verb|fp32| and $2.62 - 3.40\times$ for
-\verb|fp32+fp16|, consistent with Section~\ref{sec:batched-dense-matrix-vector-product}.
-On the other hand, the time spent in the coarse \verb|CUDSS| solver is only marginally
-affected, showing speedups of $1.09 - 1.20\times$ when using \verb|float32| instead
-of \verb|float64|. This is expected since \verb|CUDSS| employs a sparse
-decomposition algorithm that relies on reading the integer indices of the
-nonzero entries, which are unaffected by floating-point precision changes.
+in each preconditioner component by timing them independently and scaling by the
+number of PCG iterations. The results are presented in Figure~\ref{fig:precision-plots}.
 
 \begin{figure}
   \centering
@@ -1483,17 +1489,28 @@ nonzero entries, which are unaffected by floating-point precision changes.
   \label{fig:precision-plots}
 \end{figure}
 
-The remainder of the ASM time -- application of the restriction and prolongation
-matrices $\bm{R_C}$ and $\bm{R_C}^T$, and summation of the solvers' contributions
--- is also insensitive to the precision settings. There are two possible reasons
-for this. First, restriction and prolongation to the coarse space $V_C$ require
-reading integer index sequences $l_i$ and $\bar l_i$ that determine the nonzero
+The most significant speedups relative to \verb|fp64| occur in the local solvers:
+$1.77-3.31\times$ for \verb|fp64+fp16| and $2.63-3.47\times$ for
+\verb|fp32+fp16|, consistent with Section~\ref{sec:batched-dense-matrix-vector-product}.
+As expected, \verb|+bf16| variants offer no performance advantage
+over \verb|+fp16|; given the convergence issues discussed above, they should be avoided.
+
+By contrast, time spent in the coarse \verb|CUDSS| solver is only marginally
+affected, showing speedups of $1.07 - 1.18\times$ when using \verb|float32| instead
+of \verb|float64|. This is expected since \verb|CUDSS| employs a sparse
+decomposition algorithm that relies on reading the integer indices of the
+nonzero entries, which are unaffected by floating-point precision changes.
+
+The remaining preconditioner components -- application of matrices $\bm{R_C}$,
+$\bm{R_C}^T$ and $\bm{A_R}$, and summation of the solvers' contributions
+-- are likewise insensitive to precision changes. There are two possible reasons
+for this. First, these operations require reading integer indices that determine the nonzero
 structure of $\bm{R_C}$ and $\bm{R_C}^T$ (see Algorithm~\ref{preconditioner-M-pseudocode});
 these indices are not subject to precision reduction. Second, this part incurs
 type conversions when lower precisions are used, which reduce the attainable
 speedup.
 
-Finally, time spent outside the ASM preconditioner is essentially unaffected,
+Finally, time spent outside the preconditioner is essentially unaffected,
 as expected, since the remainder of the PCG iteration is always performed in
 double precision, and the modest increases in iteration counts have a negligible
 impact on this cost. The only exception is the \verb|fp32+bf16| case for $p=5$,
@@ -1504,19 +1521,17 @@ gains from using lower precisions may be achieved when the local solvers dominat
 the preconditioner cost, i.e., when the local problems are large and the coarse
 problem is small. Indeed, Figure~\ref{fig:precision-plots} shows that, for smaller
 $M=\mathcal{M}$ and larger $p$, the speedup in the total solution time obtained
-with \verb|fp32| and \verb|fp32+fp16| over \verb|fp64| increases.
+with lower precision increases.
 
-Overall, our measurements indicate that mixed precision is highly beneficial.
-With \verb|Inv| as the local solver, we observed speedups up to $1.44\times$
-for \verb|fp32| and $1.81\times$ for \verb|fp32+fp16|. The \verb|fp32+fp16| variant
-should, however, be used with caution. When the local problems are small, the
-additional reduction in local solvers' time offered by \verb|fp32+fp16| relative
-to \verb|fp32| may be insufficient to introduce a meaningful speedup in total solution time
-(this was observed for $\mathcal{M}=M=m$). Even though this was not observed here,
-\verb|fp32+fp16| may, in extreme cases, also cause a minor slowdown compared
-with \verb|fp32|, as we will see in Section~\ref{sec:experiments-parallelism}.
-The \verb|fp32+bf16| variant should be avoided, as it offers no performance
-benefit over \verb|fp32+fp16| and may severely degrade convergence.
+Overall, our measurements indicate that mixed precisions are highly beneficial,
+but must be chosen carefully to avoid convergence issues. The additive Schwarz
+preconditioner can be used in either double or single precision,
+while the hybrid variant should be restricted to double precision.
+Both preconditioners benefit from storing the local solvers' matrices
+in lower precision, which can be safely set to \verb|float32| or \verb|float16|
+without significant degradation of convergence. Employing these settings
+yields speedups in the total solution time of up to $1.92\times$ for both
+additive and hybrid Schwarz methods.
 
 \subsection{Tuning Parallelism by Selecting $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$}
 \label{sec:experiments-parallelism}
