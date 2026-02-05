@@ -1589,15 +1589,14 @@ top variant in nearly all cases; exceptions occured for
 $\mathcal{T}_H\in \{\mathcal{C}_{11}, \mathcal{S}_{11}\}$, where single-precision
 \verb|Inv()| was marginally faster.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=\textwidth]{solver_plots}
-%   \caption{Comparison of the \texttt{Inv(float16)} solution time, decomposed by component,
-%   for various $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$. Markers indicate
-%   the solution time when \texttt{Inv(float16)} is replaced by other local solvers.
-%   Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
-%   \label{fig:solver-plots}
-% \end{figure}
+\begin{figure}
+  \centering
+  \includesvg[width=\textwidth]{parallelism_plots}
+  \caption{Comparison of the \texttt{Inv(float16)} solution time, decomposed by component,
+  for various $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$.
+  Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
+  \label{fig:parallelism-plots}
+\end{figure}
 
 The other dense batch solvers (\verb|LU| and \verb|Cholesky|) reported in
 Figure~\ref{fig:solver-plots} are noticeably
