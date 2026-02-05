@@ -233,8 +233,7 @@ by the Lax-Milgram lemma \cite{Brenner}.
 \label{sec:discretization}
 
 Let $\{\mathcal{T}_h\}_{h>0}$ be a shape-regular family of affine
-triangulations of $\Omega$ (cf. \cite[Definitions 1.53, 1.107]{Ern-FEM}), and denote by
-$h=\max_{K\in \mathcal{T}_h} \operatorname{diam}(K)$ a parameter describing the mesh size.
+triangulations of $\Omega$ (cf. \cite[Definitions 1.53, 1.107]{Ern-FEM}).
 We fix one triangulation $\mathcal{T}_h$ (the \emph{fine mesh}) and
 denote by $\mathcal{E}_h$ the set of all its faces (edges in 2D).
 For a~given integer $p\geq 1$, we will approximate the solution of \eqref{var-cont-formulation}
@@ -343,8 +342,7 @@ We assume the inclusion
 \]
 in the sense that $\mathcal{T}_H$ is a refinement of $\mathcal{T}_{\mathcal{H}}$ and
 $\mathcal{T}_h$ is a refinement of $\mathcal{T}_H$ (see Figure~\ref{fig:mesh_examples}
-for examples). Finally, set
-$H=\max_{j} \operatorname{diam}(\Omega_j)$ and $\mathcal{H}=\max_{j} \operatorname{diam}(D_j)$.
+for examples).
 
 Following \cite{Przykry}, we decompose the finite element space $V_h$, hereafter
 denoted simply by $V$, into the sum
@@ -1285,16 +1283,10 @@ and the RPT-I algorithm as the default configuration in our PCG implementation.
 \section{Parameter Tuning and Performance Evaluation}
 \label{chap:experiments}
 
-In this chapter we experimentally evaluate the performance of our implementation
-of the ASM solver described in Chapter~\ref{chap:implementation}. The experimental
-setup is detailed in Section~\ref{sec:experimental-setup}. We first verify
-theoretical properties of the preconditioned ASM operator in
-Section~\ref{sec:dependence-on-parameters}. Next, Section~\ref{sec:precision-experiments}
-examines the effect of using lower precision arithmetic,
-and Section~\ref{sec:experiments-parallelism} investigates the impact of
-of the coarse and local solvers' mesh choices. Finally,
-Section~\ref{sec:experiments-amgx-comparison} compares our implementation to
-the reference AmgX preconditioner.
+In this section, we present an experimental evaluation of our implementations
+of the additive and hybrid Schwarz solvers. We examine the impact of
+preconditioner parameters on solver efficiency and compare the
+best-performing configurations with NVIDIA AmgX.
 
 \subsection{Experimental Setup}
 \label{sec:experimental-setup}
@@ -1308,18 +1300,19 @@ with $p\geq 1$, which is not covered by \cite{Przykry} nor~\cite{asm-hp-two-mesh
 but was partially addressed in~\cite{Przykry-hp}.
 In this setting we expect the condition number of the preconditioned operator
 $T_{add}$ to satisfy
-\[
-  \kappa(T_{add})\lesssim p^2\frac{\mathcal{H}^2}{hH},
-\]
-where by $\lesssim$ we mean inequality up to a constant independent of
+\begin{equation}
+  \kappa(T_{add})\lesssim p^2\frac{\mathcal{H}^2}{hH}.\label{eq:add-cond-bound}
+\end{equation}
+Here $h$, $H$ and $\mathcal{H}$ are the maximum diameters of elements in the fine mesh $T_h$,
+the solvers' mesh $T_H$ and the coarse mesh $T_{\mathcal{H}}$, respectively, and by $\lesssim$
+we denote an inequality up to a constant independent of
 $h$, $H$, $\mathcal{H}$, $p$ and jumps of the coefficient $\rho$. Moreover,
-from the abstract theory of Schwarz operators (see~\cite{toselli}) it follows that
-\[
-  \kappa(T_{hyb})\lesssim \kappa(T_{add}).
-\]
+from the general theory of Schwarz operators (see~\cite{toselli}) it follows that
+\begin{equation}
+  \kappa(T_{hyb})\lesssim \kappa(T_{add}).\label{eq:hyb-cond-bound}
+\end{equation}
 
-We\todo{uwaga o tym, ze wystarczy ograniczyc sie do takich siatek i ciaglego wsp}
-introduce two types of uniform meshes for use in the experiments: consisting
+We introduce two types of uniform meshes for use in the experiments: consisting
 of either only hypercubes or only simplices. For $d\in\{2, 3\}$ and integer $m\geq 0$, let
 $\mathcal{C}_m^d$ denote the partition of $(0, 1)^d$ into $2^{md}$ equal hypercubes
 (squares in 2D, cubes in 3D) of side length~$2^{-m}$. The mesh $\mathcal{S}_m^d$
@@ -1339,6 +1332,15 @@ $\mathcal{S}_m^d\subseteq \mathcal{S}_{m+1}^d$ for $m\geq 0$. Moreover
 $\mathcal{C}_m^d \subseteq \mathcal{C}_{m + 1}^d$ and $\mathcal{C}_m^d \subseteq \mathcal{S}_m^d$
 for all $m\geq 0$.
 
+\begin{figure}
+  \centering
+  \includesvg[width=0.7\textwidth]{mesh_examples}
+  \caption{Example experimental meshes and their refinement relationships for $d=2$:
+  ${\mathcal{S}_1\subseteq \mathcal{S}_2\subseteq \mathcal{S}_3}$ (left) and
+  $\mathcal{C}_1\subseteq \mathcal{C}_3\subseteq \mathcal{S}_3$ (right).}
+  \label{fig:mesh_examples}
+\end{figure}
+
 We always use $\mathcal{S}_m$ (for some $m\geq 0$) as the fine mesh $\mathcal{T}_h$, which gives
 $h=2^{-m}\sqrt{d}$. For any integers $0\leq \mathcal{M}\leq M \leq m$ we select
 the coarse and local solvers' meshes from the following combinations:
@@ -1348,14 +1350,24 @@ the coarse and local solvers' meshes from the following combinations:
   \item $\mathcal{T}_\mathcal{H}=\mathcal{C}_\mathcal{M}$, $\mathcal{T}_H=\mathcal{C}_M$.
 \end{itemize}
 In all cases $\mathcal{T}_\mathcal{H}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h$ with
-$\mathcal{H}=2^{-\mathcal{M}}\sqrt{d}$ and $H=2^{-M}\sqrt{d}$. This choice
-of $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$ satisfies the regularity conditions
-of Theorems~\ref{thm:Przykry-asm} and~\ref{thm:two-meshes-asm}, as well as the
-assumption of an equal number of unknowns per local solver
-(see Section~\ref{sec:preconditioner-alg}).
+$\mathcal{H}=2^{-\mathcal{M}}\sqrt{d}$ and $H=2^{-M}\sqrt{d}$, which combined
+with \eqref{eq:add-cond-bound} and \eqref{eq:hyb-cond-bound} yields
+\[
+  \kappa(T_{hyb})\lesssim \kappa(T_{add})\lesssim p^2 2^{m + M - 2\mathcal{M}}.
+\]
 
-The code for the experiments is included in the \verb|experiments| package
-attached to this thesis.
+Please note that the restriction to the particular domain $\Omega$, mesh families
+$\mathcal{T}_h, \mathcal{T}_H, \mathcal{T}_{\mathcal{H}}$ and coefficient $\rho$ is made solely for
+the sake of experimental evaluation. The choice of uniform meshes allows
+easy comparison of different granularities of parallelism, while the continuous coefficient
+simplifies constructing the exact solution and hence computing the approximation error.
+Nevertheless, any choice of meshes is supported by our implementation,
+provided the number of unknowns per local solver remains constant
+(see~Section~\ref{sec:preconditioner-alg}). Moreover, the theoretical results
+from \cite{Przykry, Przykry-hp} ensure that the effectiveness of the proposed
+preconditioners will carry over to more general settings, including
+discontinuities in $\rho$.
+
 Both mesh generation and discretization are performed on a CPU using DOLFINx 0.9.0~\cite{dolfinx}.
 The resulting stiffness matrix $\bm{A}$ and load vector $\bm{f}$ from the discrete system
 \eqref{auf} are transferred to the GPU, which performs both the setup
@@ -1371,28 +1383,18 @@ The general measurement procedure is as follows. We perform $N$ rounds, each
 consisting of $K$ consecutive runs of the measured phase and record the total
 time of each round independently. For each round we compute the per-run time
 as the round time divided by $K$, and we report the minimum per-run time over
-all rounds.
+all rounds. We always use $N=10$ and select $K$ depending on the execution
+time of the measured phase.
 
-Executing multiple rounds is necessary for several reasons. First, after
-idle periods the GPU requires a warm-up interval to reach its maximum frequency.
-Second, the initial run may be significantly slower due to just-in-time
-kernel compilation. Finally, individual runs can be slower because of external
-factors such as other users launching tasks on the same host. On the other hand,
-choosing $K>1$ is useful only when the measured function is very short
-(below roughly $10$\si{ms}), so that the measurement overhead is non-negligible
-and must be amortized by repeated execution. Accordingly, we use the following
-settings: $N=3$, $K=1$ for setup phases, $N=30$, $K=1$ for solve-time measurements,
-and $N=30$, $K=10$ when measuring a single execution of the ASM preconditioner
-or one of its constituent parts.
-
-\begin{figure}
-  \centering
-  \includesvg[width=0.7\textwidth]{mesh_examples}
-  \caption{Example experimental meshes and their refinement relationships for $d=2$:
-  ${\mathcal{S}_1\subseteq \mathcal{S}_2\subseteq \mathcal{S}_3}$ (left) and
-  $\mathcal{C}_1\subseteq \mathcal{C}_3\subseteq \mathcal{S}_3$ (right).}
-  \label{fig:mesh_examples}
-\end{figure}
+Our primary metric in this section is the \emph{solution time} of the system \eqref{auf},
+defined as the time required to reduce the Euclidean norm of the initial residual
+by a factor of $10^9$ using the PCG method with the chosen preconditioner.
+Note that the solution time excludes both the time required to transfer
+data between the CPU and GPU and the preconditioner setup time, since these costs
+should be amortized over multiple solves with the same matrix $\bm{A}$ in
+production use. Because the solution time depends strongly on the system size,
+we also report the \emph{solution throughput}, calculated as the
+ratio of the number of unknowns to the solution time (measured in DoF/s).
 
 \subsection{Exploiting Mixed Precision}
 \label{sec:precision-experiments}
@@ -1708,10 +1710,7 @@ combining them with our customized PCG implementation.
 
 To ensure this did not degrade AmgX performance, we compared the
 \verb|L1_TRUNC| preconditioner run with AmgX PCG against various configurations
-of our PCG implementation. As usual, we measured the time required to reduce
-the initial Euclidean norm of the residual by a factor of $10^9$. Our performance
-metric is the \emph{throughput}, defined as the problem size (in DoFs) divided
-by the total solution time. The results for $d=2$ and $p=3$ are shown in
+of our PCG implementation. The results for $d=2$ and $p=3$ are shown in
 Figure~\ref{fig:amgx-pcg-throughput}.
 
 \begin{figure}
