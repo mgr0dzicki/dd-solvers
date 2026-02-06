@@ -1352,9 +1352,9 @@ the coarse and local solvers' meshes from the following combinations:
 In all cases $\mathcal{T}_\mathcal{H}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h$ with
 $\mathcal{H}=2^{-\mathcal{M}}\sqrt{d}$ and $H=2^{-M}\sqrt{d}$, which combined
 with \eqref{eq:add-cond-bound} and \eqref{eq:hyb-cond-bound} yields
-\[
-  \kappa(T_{hyb})\lesssim \kappa(T_{add})\lesssim p^2 2^{m + M - 2\mathcal{M}}.
-\]
+\begin{equation}
+  \kappa(T_{hyb})\lesssim \kappa(T_{add})\lesssim p^2 2^{m + M - 2\mathcal{M}}.\label{eq:cond-bound-m-M-M}
+\end{equation}
 
 Please note that the restriction to the particular domain $\Omega$, mesh families
 $\mathcal{T}_h, \mathcal{T}_H, \mathcal{T}_{\mathcal{H}}$ and coefficient $\rho$ is made solely for
@@ -1501,8 +1501,7 @@ of \verb|float64|. This is expected since \verb|CUDSS| employs a sparse
 decomposition algorithm that relies on reading the integer indices of the
 nonzero entries, which are unaffected by floating-point precision changes.
 
-The remaining preconditioner components -- application of matrices $\bm{R_C}$,
-$\bm{R_C}^T$ and $\bm{A_R}$, and summation of the solvers' contributions
+The remaining preconditioner components -- application of $\bm{R_C}$, $\bm{R_C}^T$ and $\bm{A_R}$
 -- are likewise insensitive to precision changes. There are two possible reasons
 for this. First, these operations require reading integer indices that determine the nonzero
 structure of $\bm{R_C}$ and $\bm{R_C}^T$ (see Algorithm~\ref{preconditioner-M-pseudocode});
@@ -1533,13 +1532,12 @@ without significant degradation of convergence. Employing these settings
 yields speedups in the total solution time of up to $1.92\times$ for both
 additive and hybrid Schwarz methods.
 
-\subsection{Tuning Parallelism by Selecting $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$}
+\subsection{Tuning Parallelism Granularity}
 \label{sec:experiments-parallelism}
 
-This section examines how the performance of the ASM solver depends on the choice
-of the coarse mesh $\mathcal{T}_\mathcal{H}$ and the local solvers' mesh $\mathcal{T}_H$.
-Our metric of interest is now total solution time rather than the
-iteration count considered in Section~\ref{sec:dependence-on-parameters}.
+We now compare the performance of the additive and hybrid Schwarz preconditioners
+across different choices of the coarse mesh $\mathcal{T}_\mathcal{H}$ and the
+local solvers' mesh $\mathcal{T}_H$.
 
 We set $d=2$ and $p=1$ to maximize the amount of possible parallelism: the local solvers' matrices
 can be as small as $3\times 3$ when $\mathcal{T}_H=\mathcal{T}_h$. We fix
@@ -1548,116 +1546,88 @@ with roughly 25 million degrees of freedom. For the coarse mesh we consider
 $\mathcal{C}_\mathcal{M}$ and $\mathcal{S}_\mathcal{M}$ with $8\leq \mathcal{M}\leq 11$.
 For each choice of $\mathcal{T}_\mathcal{H}$ we evaluate all $\mathcal{T}_H$
 satisfying $\mathcal{T}_\mathcal{H}\subseteq \mathcal{T}_H\subseteq \mathcal{T}_h$,
-and being either $\mathcal{C}_M$ or $\mathcal{S}_M$ for some $M$.
+and being either $\mathcal{C}_M$ or $\mathcal{S}_M$ for some $M$. Finally,
+following the conclusions of the previous section, we employ mixed\nobreakdash-precision
+settings expected to yield the best performance: \verb|fp32+fp16| for the
+additive operator and \verb|fp64+fp16| for the hybrid one.
 
-We test all available local solvers: \verb|Inv|, \verb|LU|, \verb|Cholesky| and
-\verb|BatchCUDSS|. In all cases we apply the preconditioner in single precision,
-as the previous section demonstrated its advantage over double precision.
-For \verb|Inv| we additionally evaluate the half-precision configuration
-\verb|fp32+fp16|. All timings report the time required to reduce the initial
-Euclidean norm of the residual by a~factor of $10^9$. Precise solver configurations
-are given in Listing~\ref{lst:solver-experiments-solvers}.
-
-\begin{algorithm}
-\vspace{-3pt}
-\begin{lstlisting}[
-  caption={Solvers used in the parallelism experiments.},
-  label={lst:solver-experiments-solvers},
-  style=Python
-]
-CG(ASM(torch.float32, local_solver, CUDSS()), rtol=1e-9)
-for local_solver in (
-  Inv(),
-  Inv(torch.float16),
-  LU(),
-  Cholesky(),
-  BatchCUDSS(),
-)
-\end{lstlisting}
-\vspace{-3pt}
-\end{algorithm}
-
-The comparison of solution times is shown in Figure~\ref{fig:solver-plots}.
-Following the approach from the previous section, we also estimated the time
-contribution of each ASM component. Missing entries correspond to
-a case when either some dense batch solvers failed because local
-problems were too large ($\mathcal{T}_H\in \{\mathcal{C}_8, \mathcal{S}_8\}$),
-or the sparse batch solver failed due to the excessive number of local problems
-($\mathcal{T}_H \in \{\mathcal{C}_{11}, \mathcal{S}_{11}\}$).
-We adopt \verb|Inv(float16)| as the reference local solver since it was the
-top variant in nearly all cases; exceptions occured for
-$\mathcal{T}_H\in \{\mathcal{C}_{11}, \mathcal{S}_{11}\}$, where single-precision
-\verb|Inv()| was marginally faster.
+The comparison of solution times is shown in Figure~\ref{fig:parallelism-plots}.
+Missing entries indicate solver failures caused by out-of-memory errors. These occurred
+when the local solvers' mesh was too coarse, producing local problems
+that were too large to fit in GPU memory when stored densely.
+The hybrid operator is more prone to this issue, as it requires storing the
+additional sparse matrix $\bm{A_R}$ (see Section~\ref{sec:preconditioner-alg}).
 
 \begin{figure}
   \centering
   \includesvg[width=\textwidth]{parallelism_plots}
-  \caption{Comparison of the \texttt{Inv(float16)} solution time, decomposed by component,
-  for various $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$.
+  \caption{Comparison of the solution time, decomposed by component,
+  for various $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$. Iteration counts
+  are indicated above the bars.
   Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
   \label{fig:parallelism-plots}
 \end{figure}
 
-The other dense batch solvers (\verb|LU| and \verb|Cholesky|) reported in
-Figure~\ref{fig:solver-plots} are noticeably
-slower than the direct inverse (note the logarithmic scale for times above 1\,s).
-This is expected since they are harder to parallelize effectively, moreover,
-we invested additional effort in optimizing \verb|Inv| relative to the baseline
-PyTorch implementation (see Section~\ref{sec:explicit-inverse-batch-solver}).
-Although \verb|LU| and \verb|Cholesky| offer faster setup times
-than \verb|Inv| for large local problems (Figure~\ref{fig:local-solver-setup-times}),
-their slower solve phase outweighs that benefit, even when only a single
-solve is performed per setup.
+The observed dependence of the iteration count on the meshes $\mathcal{T}_{\mathcal{H}}$
+and $\mathcal{T}_H$ for both the additive and hybrid Schwarz preconditioners
+is consistent with the condition number bound \eqref{eq:cond-bound-m-M-M}.
+Minor deviations from the monotonic growth with increasing $M$
+(for example, $\mathcal{T}_H=\mathcal{S}_{10}$ versus $\mathcal{T}_H=\mathcal{C}_{11}$ when
+$\mathcal{T}_\mathcal{H}=\mathcal{C}_{10}$) can be attributed to the use of reduced
+precisions. We also observe that the hybrid operator consistently requires fewer
+iterations than the additive one. The largest reduction -- up to a factor of
+$1.83\times$ -- occurs when the solvers' mesh is close to the coarse mesh.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=\textwidth]{local_solvers_setup_times}
-%   \caption{Setup time of the local solvers (including the construction of
-%   $\bm{A_0}, ..., \bm{A_{N_H-1}}$ from~$\bm{A}$) as a~function of $\mathcal{T}_H$
-%   for the dense batch solvers (left) and the sparse batch solver (right). Parameters:
-%   $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
-%   \label{fig:local-solver-setup-times}
-% \end{figure}
+The contributions of individual preconditioner components to the total solution time
+largely match our expectations. Time spent outside the preconditioner is
+proportional to the iteration count. When $\mathcal{T}_{\mathcal{H}}$ is close
+to $\mathcal{T}_h$, most of the time is consumed by the coarse solver; conversely,
+the cost of the local solvers is significant only when $\mathcal{T}_H$ is near
+$\mathcal{T}_{\mathcal{H}}$. It is somewhat surprising that the cost
+of applying $\bm{R_C}$ and $\bm{R_C}^T$ in the additive operator
+is high when $\mathcal{T}_H$ is close to $\mathcal{T}_h$, and in some cases
+dominates the preconditioner cost. The most likely explanation is the generality
+of the \verb|torch.segment_reduce| routine
+used to implement $\bm{R_C}$ (see Listing~\ref{lst:preconditioner-solve}), which
+supports an arbitrary distribution of elements among subdomains. This overhead
+could be eliminated by additionally assuming that the number of DoFs per
+coarse element is constant. However, we did not pursue this specialization in order
+to keep the implementation general. Note that when the $\bm{R_C}$ application
+is fused with the CSR matrix-vector product in the hybrid operator, this cost
+is substantially reduced.
 
-The \verb|BatchCUDSS| solver performs poorly for small local problems,
-which is expected. Surprisingly, it only marginally outperforms \verb|LU()| even
-for $T_H=\mathcal{C}_8$, where the local solvers' matrices are $384\times 384$.
-Moreover, the setup times for \verb|BatchCUDSS| are two orders of magnitude larger
-than those of the dense batch solvers. \verb|BatchCUDSS| would definitely be
-preferable for larger local problems, when the dense batch solvers would exhaust
-GPU memory. However, we find it very unlikely to provide competitive solution
-time in these cases, given that its best performance among considered scenarios
-occured for $\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{C}_{10}$, and
-worsened as $\mathcal{T}_\mathcal{H}$ became coarser.
-
-The above observations indicate that the explicit inverse dense batch solver
-is the optimal choice for problems of the size considered here. We now compare
-its performance across different choices of $\mathcal{T}_\mathcal{H}$ and
-$\mathcal{T}_H$. When the coarse mesh is fixed and $\mathcal{M}\leq 9$,
-the best choice of $\mathcal{T}_H$ lies between $\mathcal{T}_\mathcal{H}$
-and $\mathcal{T}_h$, demonstrating the advantage of the three-grid ASM over
-the two-grid alternative. However, the best overall three-grid configuration
+The above observations indicate that reducing the iteration count comes at the
+expense of increasing the preconditioner cost per iteration. Hence,
+the optimal choice of $\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$ is the one
+that balances these two effects. Indeed, when the coarse mesh is fixed and
+$\mathcal{M}\leq 9$, the best choice of $\mathcal{T}_H$ lies between $\mathcal{T}_\mathcal{H}$
+and $\mathcal{T}_h$, demonstrating the advantage of the three\nobreakdash-grid Schwarz method
+over the two-grid alternative. However, the best overall three\nobreakdash-grid configuration in the additive case
 ($\mathcal{T}_\mathcal{H}=\mathcal{C}_9$, $\mathcal{T}_H=\mathcal{C}_{10}$)
-is only $1.08\times$ faster than the best overall two-grid variant
-($\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{S}_{9}$).
-This is because the coarse \verb|CUDSS| solver performs very well even
-for large $\mathcal{T}_\mathcal{H}$ (with reasonable setup times -- see
-Figure~\ref{fig:coarse-solver-setup-times}), and therefore it is optimal to choose
+is only $1.07\times$ faster than the best overall two-grid variant
+($\mathcal{T}_\mathcal{H}=\mathcal{T}_H=\mathcal{S}_{9}$). For the hybrid operator
+the best configuration ($\mathcal{T}_{\mathcal{H}}=\mathcal{T}_H=\mathcal{C}_{10}$)
+is already the two-grid setup. This is because the coarse \verb|CUDSS| solver performs very well even
+for large $\mathcal{T}_\mathcal{H}$, and therefore it is optimal to choose
 $\mathcal{T}_\mathcal{H}$ close to $\mathcal{T}_h$, leaving little room for
 improvement by introducing an intermediate $\mathcal{T}_H$. We nevertheless
-expect the three-grid approach to offer greater potential on larger problems,
+expect the three\nobreakdash-grid approach to offer greater potential on larger problems,
 where $\mathcal{T}_\mathcal{H}$ cannot be chosen near $\mathcal{T}_h$.
-Such problems, however, turned out to be difficult to handle on a single GPU due to memory
-constraints and were therefore left outside the scope of this thesis.
+Such problems, however, are difficult to handle on a single GPU due to memory
+constraints and were therefore outside the scope of this work.
 
-% \begin{figure}
-%   \centering
-%   \includesvg[width=0.4\textwidth]{coarse_solver_setup_times}
-%   \caption{Setup time of the coarse solver (including the construction
-%   of $\bm{A_C}$ from~$\bm{A}$) as a~function of $\mathcal{T}_\mathcal{H}$.
-%   Parameters: $d=2$, $p=1$ and $\mathcal{T}_h=\mathcal{S}_{11}$.}
-%   \label{fig:coarse-solver-setup-times}
-% \end{figure}
+Finally, lower iteration counts combined with fusing
+the costly application of $\bm{R_C}$ into the CSR matrix-vector product
+in the hybrid operator make it significantly faster than the additive one,
+with speedups up to $2.01\times$ for fixed mesh combinations.
+A few exceptions occur when the hybrid operator failed due to
+out-of-memory errors while the additive one succeeded, or in the single case
+$\mathcal{T}_\mathcal{H}=\mathcal{S}_8$, $\mathcal{T}_H=\mathcal{S}_{10}$,
+where the additive variant was marginally faster. Comparing the
+best overall configurations, the hybrid method is $1.61\times$ faster
+than the additive one. This is a substantial advantage, particularly given
+that the hybrid operator runs in higher precision and requires an
+additional sparse matrix-vector product relative to the additive variant.
 
 \subsection{Comparison with AmgX}
 \label{sec:experiments-amgx-comparison}
@@ -1671,7 +1641,7 @@ careful tuning is required to obtain optimal performance for a given problem
 and, in our case, to ensure a "fair" comparison. For this reason, we give
 a detailed description of our AmgX setup
 in Section~\ref{sec:amgx-configuration},
-before reporting the results in Section~\ref{sec:amgx-comparison-results}.
+before reporting the comparison results in Section~\ref{sec:amgx-comparison-results}.
 
 \subsubsection{AmgX Configuration}
 \label{sec:amgx-configuration}
