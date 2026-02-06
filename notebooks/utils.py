@@ -52,6 +52,7 @@ def plot_clustered_stacked(
     alpha_list=None,
     cmap=lambda x: plt.cm.Set2(1 - x),
     add_legend=True,
+    value_col=None,
 ):
     if len(df_list) == 0:
         raise ValueError("df_list must contain at least one DataFrame")
@@ -63,6 +64,15 @@ def plot_clustered_stacked(
     for df in df_list:
         if not df.columns.equals(cols) or not df.index.equals(idx):
             raise ValueError("All dataframes must have identical columns and index")
+
+    if value_col is not None:
+        add_values = True
+        if value_col not in cols:
+            raise ValueError(f"value_col '{value_col}' not found in dataframe columns")
+        cols = [col for col in cols if col != value_col]
+        n_col -= 1
+    else:
+        add_values = False
 
     if hatch_list is None:
         hatch_list = [None] * n_df
@@ -93,6 +103,17 @@ def plot_clustered_stacked(
                 alpha=alpha_list[i],
             )
             bottoms = bottoms + heights
+
+        if add_values:
+            for j in range(len(bottoms)):
+                ax.text(
+                    xpos[j],
+                    bottoms[j],
+                    df[value_col].iloc[j],
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
 
     ax.set_xticks(x)
     ax.set_xticklabels(idx, rotation=0)
