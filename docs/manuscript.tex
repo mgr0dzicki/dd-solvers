@@ -1742,20 +1742,11 @@ those in Section~\ref{sec:amgx-preconditioner}. We attribute this improvement to
 replacing the AmgX PCG implementation with our optimized version, which additionally
 permits applying the AMG preconditioner in single precision.
 
-\begin{table}
+\begin{figure}
   \centering
-
-  \caption{Best solution times obtained for selected model problems and speedups
-  relative to the reference AmgX preconditioner. All variants employ
-  \texttt{Inv(float16)} as the local solver.}
-  \label{tab:experiment-speedups}
-
-  \input{tables/experiment_speedups.tex}
-
-  % \bigskip
-
-  % \input{tables/experiment_speedups_2.tex}
-\end{table}
+  \includesvg[width=\textwidth]{throughput_vs_amgx}
+  \label{fig:throughput-vs-amgx}
+\end{figure}
 
 For 2D problems, the elapsed time of the solve phase of our ASM implementation
 is slightly worse that that of AmgX.
