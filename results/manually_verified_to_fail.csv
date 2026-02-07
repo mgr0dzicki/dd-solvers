@@ -1,0 +1,3 @@
+test case,p,fine m,solver,exception
+continuous coefficient 2D,4,S10,"CG(AMGX(L1_TRUNC, torch.float32), bsr_matmul=True)","Thrust failure: parallel_for: failed to synchronize: cudaErrorIllegalAddress: an illegal memory access was encountered"
+continuous coefficient 3D,1,S7,CUDSS,"RuntimeError: CUDA error: an illegal memory access was encountered"
