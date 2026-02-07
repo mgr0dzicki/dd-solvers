@@ -31,29 +31,21 @@
 # timeout $TIMELIMIT python test_reference_solvers.py 3 3 5 cudss
 # timeout $TIMELIMIT python test_reference_solvers.py 3 4 4 cudss
 
-# for m in {6..10}; do python test_reference_solvers.py 2 2 $m amgx,cudss ; done
-# for m in {5..9}; do python test_reference_solvers.py 2 4 $m amgx,cudss ; done
-# # python test_reference_solvers.py 3 4 4 amgx,cudss dopisz wyzej, ale juz jest policzone
-# for m in {1..3}; do python test_reference_solvers.py 3 5 $m amgx,cudss ; done
+for m in {6..10}; do python test_reference_solvers.py 2 2 $m amgx,cudss ; done
+for m in {5..9}; do python test_reference_solvers.py 2 4 $m amgx,cudss ; done
+# python test_reference_solvers.py 3 4 4 amgx,cudss dopisz wyzej, ale juz jest policzone
+for m in {1..3}; do python test_reference_solvers.py 3 5 $m amgx,cudss ; done
 
-# python test_reference_solvers.py 2 2 11 amgx
-# python test_reference_solvers.py 2 4 10 amgx
+python test_reference_solvers.py 2 2 11 amgx
+python test_reference_solvers.py 2 4 10 amgx
 
-# python test_reference_solvers.py 3 4 5 amgx
-# python test_reference_solvers.py 3 5 4 amgx
+python test_reference_solvers.py 3 4 5 amgx
+python test_reference_solvers.py 3 5 4 amgx
 
-# TIMELIMIT=1200  # 20 minutes
-# timeout $TIMELIMIT python test_reference_solvers.py 2 2 11 cudss
-# timeout $TIMELIMIT python test_reference_solvers.py 2 4 10 cudss
-
-# timeout $TIMELIMIT python test_reference_solvers.py 3 4 5 cudss
-# timeout $TIMELIMIT python test_reference_solvers.py 3 5 4 cudss
-
-
-for m in {5..8}; do python test_reference_solvers.py 2 6 $m amgx,cudss ; done
-for m in {5..8}; do python test_reference_solvers.py 2 7 $m amgx,cudss ; done
-python test_reference_solvers.py 2 6 9 amgx
-python test_reference_solvers.py 2 7 9 amgx
 TIMELIMIT=1200  # 20 minutes
-timeout $TIMELIMIT python test_reference_solvers.py 2 6 9 cudss
-timeout $TIMELIMIT python test_reference_solvers.py 2 7 9 cudss
+timeout $TIMELIMIT python test_reference_solvers.py 2 2 11 cudss
+timeout $TIMELIMIT python test_reference_solvers.py 2 4 10 cudss
+
+timeout $TIMELIMIT python test_reference_solvers.py 3 4 5 cudss
+timeout $TIMELIMIT python test_reference_solvers.py 3 5 4 cudss
+
