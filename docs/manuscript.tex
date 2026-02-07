@@ -972,7 +972,7 @@ The result is finally converted back to the original precision in line 18.
 The entire method is decorated with \verb|torch.compile|, which fuses compatible
 operations into a~single kernel \cite{pytorch2}. For example, downcasting in line 3 and
 summation in line 7 are combined to eliminate a redundant read of
-\verb|x_lower_precision|\todo{czy to nadal jest prawda jak zmienilem kolejnosc?}.
+\verb|x_lower_precision|.
 
 Note that the preconditioners require a specific ordering of the unknowns,
 as described in Section~\ref{sec:preconditioner-alg}. If this ordering cannot be
