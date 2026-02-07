@@ -1748,6 +1748,11 @@ permits applying the AMG preconditioner in single precision.
   \label{fig:throughput-vs-amgx}
 \end{figure}
 
+\begin{table}
+  \centering
+  \include{tables/experiment_speedups}
+\end{table}
+
 For 2D problems, the elapsed time of the solve phase of our ASM implementation
 is slightly worse that that of AmgX.
 In contrast, for 3D problems the ASM preconditioner outperforms AmgX by a
