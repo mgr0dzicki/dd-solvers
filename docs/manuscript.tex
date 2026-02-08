@@ -929,16 +929,16 @@ compute the batched matrix-vector product and return the result as another tenso
 shape $(N, k)$.
 
 As a~solution, we propose two algorithms implemented as CUDA kernels.
-The first, denoted as RPT-I and presented in
+The first, denoted as BMV-I and presented in
 Algorithm~\ref{alg:batched-mat-vec-irrespective}, implements a~straightforward approach.
 Each thread computes a single element of the output tensor $y$ by alternately reading
 elements from $mat$ and $x$ to accumulate the dot product. The second,
-denoted as RPT-S, first loads all required elements of $x$ into shared memory
+denoted as BMV-S, first loads all required elements of $x$ into shared memory
 and then performs the dot product using these cached values. This approach is
 detailed in Algorithm~\ref{alg:batched-mat-vec-synchronized}.
 
 \begin{algorithm}
-  \caption{Batched dense matrix-vector product -- RPT-I kernel}
+  \caption{Batched dense matrix-vector product -- BMV-I kernel}
   \label{alg:batched-mat-vec-irrespective}
   $t \gets blockDim.x \cdot blockIdx.x + threadIdx.x$\;
   \lIf {$t \geq N k$} { \Return }
@@ -955,7 +955,7 @@ detailed in Algorithm~\ref{alg:batched-mat-vec-synchronized}.
 \end{algorithm}
 
 \begin{algorithm}
-  \caption{Batched dense matrix-vector product -- RPT-S kernel}
+  \caption{Batched dense matrix-vector product -- BMV-S kernel}
   \label{alg:batched-mat-vec-synchronized}
   $batches\_per\_block \gets \lfloor blockDim.x / k \rfloor$\;
   $local\_batch\_idx \gets \lfloor threadIdx.x / k \rfloor$\;
@@ -979,10 +979,10 @@ detailed in Algorithm~\ref{alg:batched-mat-vec-synchronized}.
   $y[b, r] \gets acc$
 \end{algorithm}
 
-In RPT-I, the assignment of threads to output elements is independent of the batch
+In BMV-I, the assignment of threads to output elements is independent of the batch
 structure; thus any $k$ is supported regardless of the kernel block size.
 We therefore use a constant block size of $128$ threads, which
-was found to yield the best overall performance. In contrast, RPT-S requires
+was found to yield the best overall performance. In contrast, BMV-S requires
 that each $k$-element vector from the batch is processed within a single thread block.
 We set the block size to $256$ for $k\leq 128$, ensuring that at least two vectors
 are processed per block. For $k>128$ we set the block size to smallest multiple of $32$
@@ -1035,12 +1035,12 @@ The results are similar for all precision combinasions; therefore, in
 Figure~\ref{fig:matrix_vec_tput} we present only
 two representative cases: when $mat$ is stored in \verb|float16| and
 $x$ is in either \verb|float32| or \verb|float64|.
-RPT-S sustains high throughput across the tested matrix sizes, reaching
+BMV-S sustains high throughput across the tested matrix sizes, reaching
 over $84\%$ of the achievable A100 memory bandwidth.
-RPT-I outperforms RPT-S only for a few smallest matrix sizes, where the
-overhead of synchronizing threads in RPT-S becomes significant.
-For $k\geq 16$, RPT-S is consistently faster
-than RPT-I, and for some precision combinations (for example
+BMV-I outperforms BMV-S only for a few smallest matrix sizes, where the
+overhead of synchronizing threads in BMV-S becomes significant.
+For $k\geq 16$, BMV-S is consistently faster
+than BMV-I, and for some precision combinations (for example
 float16$\times$float64) the difference is substantial.
 
 \begin{figure}
@@ -1060,10 +1060,10 @@ depending on the precision. However, the Schwarz preconditioners primarily targe
 smaller matrix sizes when a~\verb|DenseBatchSolver| is used. In
 Section~\ref{chap:experiments} we show that, in most scenarios, the optimal
 choice is $21\leq k\leq 60$\todo{czy na pewno?} with \verb|float16| precision
--- settings for which RPT-S is $1.43 - 4.75\times$ faster than PyTorch.
-Therefore we employ our kernels in the \verb|Inv| class, choosing RPT-I
+-- settings for which BMV-S is $1.43 - 4.75\times$ faster than PyTorch.
+Therefore we employ our kernels in the \verb|Inv| class, choosing BMV-I
 for smallest matrices ($k\leq 5$ or $k\leq 15$ depending on the precision)
-and RPT-S otherwise.
+and BMV-S otherwise.
 
 \subsection{BSR Matrix-Vector Product}
 \label{sec:bsr-matrix-vector-product}
