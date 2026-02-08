@@ -1,20 +1,20 @@
-\begin{tabular}{rrcS[table-format=2.1\,M]|lS[table-format=1.3\,s, round-mode=places, round-precision=3]|ccS[table-format=1.3\,s, round-mode=places, round-precision=3]S[table-format=1.3, round-mode=places, round-precision=3]}
+\begin{tabular}{rrc|lS[table-format=1.3\,s, round-mode=places, round-precision=3]|ccS[table-format=1.3\,s, round-mode=places, round-precision=3]S[table-format=1.3, round-mode=places, round-precision=3]}
 \toprule
 
- &  &  &  & \multicolumn{2}{c|}{{best AmgX configuration found}} & \multicolumn{4}{c}{{best hybrid variant considered}} \\
-$d$ & $p$ & $\mathcal{T}_h$ & {DoFs} & {name} & {time} & {$\mathcal{T}_\mathcal{H}$} & {$\mathcal{T}_H$} & {time} & {speedup} \\
+ &  &  & \multicolumn{2}{c|}{{best AmgX configuration found}} & \multicolumn{4}{c}{{best hybrid variant considered}} \\
+$d$ & $p$ & $\mathcal{T}_h$ & {name} & {time} & {$\mathcal{T}_\mathcal{H}$} & {$\mathcal{T}_H$} & {time} & {speedup} \\
 
 \midrule
 
-\multirow[t]{5}{*}{2} & 1 & $\mathcal{S}_{12}$ & 100.7\,{M} & \verb|L1_TRUNC, fp32| & 2.252932\, \si{\second} & $\mathcal{C}_{11}$ & $\mathcal{C}_{12}$ & 1.824603\, \si{\second} & 1.234752 \,\(\times\) \\
- & 2 & $\mathcal{S}_{11}$ & 50.3\,{M} & \verb|L1_TRUNC, fp32| & 1.840814\, \si{\second} & $\mathcal{C}_{10}$ & $\mathcal{C}_{11}$ & 1.557876\, \si{\second} & 1.181618 \,\(\times\) \\
- & 3 & $\mathcal{S}_{10}$ & 21.0\,{M} & \verb|L1_TRUNC, fp32| & 1.507047\, \si{\second} & $\mathcal{C}_{10}$ & $\mathcal{C}_{10}$ & 1.032556\, \si{\second} & 1.459530 \,\(\times\) \\
- & 4 & $\mathcal{S}_{10}$ & 31.5\,{M} & {--} & {--} & $\mathcal{C}_{10}$ & $\mathcal{C}_{10}$ & 2.027756\, \si{\second} & {$\infty\,\times$} \\
- & 5 & $\mathcal{S}_{9}$ & 11.0\,{M} & \verb|L1_TRUNC, fp32| & 1.425345\, \si{\second} & $\mathcal{C}_{9}$ & $\mathcal{C}_{9}$ & 1.084873\, \si{\second} & 1.313836 \,\(\times\) \\
-\multirow[t]{5}{*}{3} & 1 & $\mathcal{S}_{7}$ & 50.3\,{M} & \verb|AGGRESSIVE_L1, fp32| & 1.952959\, \si{\second} & $\mathcal{C}_{6}$ & $\mathcal{C}_{7}$ & 1.407376\, \si{\second} & 1.387660 \,\(\times\) \\
- & 2 & $\mathcal{S}_{6}$ & 15.7\,{M} & \verb|AGGRESSIVE_L1, fp32| & 1.943804\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{6}$ & 1.101878\, \si{\second} & 1.764083 \,\(\times\) \\
- & 3 & $\mathcal{S}_{5}$ & 3.9\,{M} & \verb|L1_TRUNC, fp32| & 1.212115\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{5}$ & 0.542874\, \si{\second} & 2.232773 \,\(\times\) \\
- & 4 & $\mathcal{S}_{5}$ & 6.9\,{M} & \verb|L1_TRUNC, fp64| & 8.055962\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{5}$ & 1.638029\, \si{\second} & 4.918082 \,\(\times\) \\
- & 5 & $\mathcal{S}_{4}$ & 1.4\,{M} & \verb|L1_TRUNC, fp32| & 2.137783\, \si{\second} & $\mathcal{C}_{4}$ & $\mathcal{C}_{4}$ & 0.653890\, \si{\second} & 3.269330 \,\(\times\) \\
+\multirow[t]{5}{*}{2} & 1 & $\mathcal{S}_{12}$ & \verb|L1_TRUNC, fp32| & 2.252932\, \si{\second} & $\mathcal{C}_{11}$ & $\mathcal{C}_{12}$ & 1.824603\, \si{\second} & 1.234752 \,\(\times\) \\
+ & 2 & $\mathcal{S}_{11}$ & \verb|L1_TRUNC, fp32| & 1.840814\, \si{\second} & $\mathcal{C}_{10}$ & $\mathcal{C}_{11}$ & 1.557876\, \si{\second} & 1.181618 \,\(\times\) \\
+ & 3 & $\mathcal{S}_{10}$ & \verb|L1_TRUNC, fp32| & 1.507047\, \si{\second} & $\mathcal{C}_{10}$ & $\mathcal{C}_{10}$ & 1.032556\, \si{\second} & 1.459530 \,\(\times\) \\
+ & 4 & $\mathcal{S}_{10}$ & {--} & {--} & $\mathcal{C}_{10}$ & $\mathcal{C}_{10}$ & 2.027756\, \si{\second} & {$\infty\,\times$} \\
+ & 5 & $\mathcal{S}_{9}$ & \verb|L1_TRUNC, fp32| & 1.425345\, \si{\second} & $\mathcal{C}_{9}$ & $\mathcal{C}_{9}$ & 1.084873\, \si{\second} & 1.313836 \,\(\times\) \\
+\multirow[t]{5}{*}{3} & 1 & $\mathcal{S}_{7}$ & \verb|AGGRESSIVE_L1, fp32| & 1.952959\, \si{\second} & $\mathcal{C}_{6}$ & $\mathcal{C}_{7}$ & 1.407376\, \si{\second} & 1.387660 \,\(\times\) \\
+ & 2 & $\mathcal{S}_{6}$ & \verb|AGGRESSIVE_L1, fp32| & 1.943804\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{6}$ & 1.101878\, \si{\second} & 1.764083 \,\(\times\) \\
+ & 3 & $\mathcal{S}_{5}$ & \verb|L1_TRUNC, fp32| & 1.212115\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{5}$ & 0.542874\, \si{\second} & 2.232773 \,\(\times\) \\
+ & 4 & $\mathcal{S}_{5}$ & \verb|L1_TRUNC, fp64| & 8.055962\, \si{\second} & $\mathcal{C}_{5}$ & $\mathcal{C}_{5}$ & 1.638029\, \si{\second} & 4.918082 \,\(\times\) \\
+ & 5 & $\mathcal{S}_{4}$ & \verb|L1_TRUNC, fp32| & 2.137783\, \si{\second} & $\mathcal{C}_{4}$ & $\mathcal{C}_{4}$ & 0.653890\, \si{\second} & 3.269330 \,\(\times\) \\
 \bottomrule
 \end{tabular}

@@ -1722,62 +1722,85 @@ when comparing with Schwarz preconditioners.
 \subsubsection{Comparison Results}
 \label{sec:amgx-comparison-results}
 
-Results for several model problems with different $d$ and $p$ are reported
-in Table~\ref{tab:experiment-speedups}. Note that we use coarser $\mathcal{T}_h$
-for larger $p$ to make the problem fit in GPU memory. The problems are large
-enough that the direct \verb|CUDSS| solver fails during setup with out-of-memory
-errors in most cases; the sole exception is $d=2, p=1, \mathcal{T}_h=\mathcal{S}_{11}$,
-for which it performs extraordinarily well, with a solution time of $0.107$\,s
-after a $17$\,s setup. Note that when using a direct solver is
-applicable, it is expected to offer significantly better performance than
-an iterative method, as observed here.
+For the final comparison, we considered $p=1,2,...,5$ for both $d=2$ and $d=3$.
+For each combination of $d$ and $p$, we tested $\mathcal{T}_h\in \{\mathcal{S}_{m-1}, \mathcal{S}_m\}$,
+where $m$ is the largest integer for which $\mathcal{T}_h=\mathcal{S}_m$ yields fewer than
+$2^{31}$ nonzeros in the stiffness matrix $\bm{A}$. This allowed us to consistently
+use 32-bit integer indices in the matrix storage format.
+The detailed parameters of the largest tested problems are listed in
+Table~\ref{tab:experiment-largest-problems}. Note that most
+are too large to be solved by a direct cuDSS solver, causing out-of-memory errors
+during setup, which motivates the use of iterative methods in this regime.
 
-For each problem we list the best AmgX variant
-(from the candidates selected in Section~\ref{sec:amgx-preconditioner}),
-the best ASM configuration overall, and the best two-grid ASM variants (with
-$\mathcal{T}_\mathcal{H}=\mathcal{T}_H$ or $\mathcal{T}_\mathcal{H}=\mathcal{T}_h$).
-In all ASM cases the winning configurations used \verb|Inv(float16)|
-as the local solver. Note that AmgX solution times reported here are smaller than
-those in Section~\ref{sec:amgx-preconditioner}. We attribute this improvement to
-replacing the AmgX PCG implementation with our optimized version, which additionally
-permits applying the AMG preconditioner in single precision.
+\begin{table}
+  \centering
+  \caption{Parameters of the largest problems tested for each combination of $d$ and $p$.}
+  \label{tab:experiment-largest-problems}
+  \include{tables/largest_problems}
+\end{table}
+
+For each preselected AmgX configuration, we test both the double- and
+mixed-precision variants. For the additive and hybrid Schwarz operators, we test
+mixed-precision settings (\verb|fp32+fp16| and \verb|fp64+fp16|, respectively),
+and for each test case select the best-performing configuration of
+$\mathcal{T}_\mathcal{H}$ and $\mathcal{T}_H$ from the mesh families introduced in
+Section~\ref{sec:experimental-setup}.
 
 \begin{figure}
   \centering
   \includesvg[width=\textwidth]{throughput_vs_amgx}
+  \caption{Maximum throughput (over tested $\mathcal{T}_h$) of our Schwarz
+  preconditioners and various AmgX configurations for different combinations of $d$ and $p$.}
   \label{fig:throughput-vs-amgx}
 \end{figure}
 
+The measured solution throughputs are shown in Figure~\ref{fig:throughput-vs-amgx}.
+We first discuss the results for $d=2$. Although all AmgX configurations
+perform well for $p=1$, only \verb|L1_TRUNC| maintains convergence for $p>1$.
+Both its double- and mixed-precision variants achieve performance similar to our
+Schwarz solvers. While the additive variant is slower than AmgX, the hybrid method
+is consistently the fastest solver across all considered problems.
+
+The 3D case is more interesting. Although more AmgX configurations converge for $p>1$,
+their performance drops substantially for $p\geq 3$. The best-performing one
+-- again \verb|L1_TRUNC| in mixed-precision mode -- loses convergence at
+$p=4$. Its double-precision variant is more stable at the cost
+of a performance degradation. In contrast, our Schwarz preconditioners maintain
+strong performance across all tested polynomial degress, achieving higher throughput
+than AmgX in every case.
+
+The best-performing configurations for the largest problems of each combination of $d$
+and $p$ are listed in Table~\ref{tab:experiment-speedups}. Note that the hybrid
+solver handled all of these cases successfully, which demonstrates that even very large problems
+(up to 100 million DoFs or a 22.76 GB matrix) can be handled on a single GPU
+with a matrix-based approach. The speedups over AmgX are highest for 3D problems
+with $p\geq 3$, consistent with Figure~\ref{fig:throughput-vs-amgx}. We emphasize
+that no further tuning of the example AmgX
+configurations was performed here; better performance may be possible by adjusting
+those parameters. Moreover, AmgX is a~general-purpose library, whereas our
+implementation is specifically tailored to the model problem \eqref{div_eq}.
+Therefore, the reported speedups should be interpreted as a demonstration of the
+potential of the Schwarz method from~\cite{Przykry} for this particular problem,
+rather than as a general comparison of the two approaches.
+
 \begin{table}
   \centering
+  \caption{Best solution times obtained for problems listed in Table~\ref{tab:experiment-largest-problems}.
+  In case $d=2$, $p=4$, $\mathcal{T}_h=\mathcal{S}_{10}$ all AmgX configurations failed
+  with out-of-memory errors.}
   \include{tables/experiment_speedups}
+  \label{tab:experiment-speedups}
 \end{table}
 
-For 2D problems, the elapsed time of the solve phase of our ASM implementation
-is slightly worse that that of AmgX.
-In contrast, for 3D problems the ASM preconditioner outperforms AmgX by a
-substantial margin, with speedups between $1.261$ and $1.771\times$.
-We emphasize that no further tuning of the example AmgX configurations
-was performed here; better performance may be possible by adjusting
-those parameters. Moreover, AmgX is a~general-purpose library, whereas our ASM
-implementation is specifically tailored to the model problem \eqref{div_eq}.
-On the other hand, AmgX is a highly optimized library developed by NVIDIA,
-while our implementation obviously has some room for further improvement.
-Therefore, we believe that the results are
-encouraging and demonstrate the potential of the ASM preconditioner
-from~\cite{Przykry}.
-
-From the experiments we observe that
-in all cases, optimal or near-optimal performance can be achieved by using
-two grids rather than three. This observation is consistent
-with Section~\ref{sec:experiments-parallelism}, where we found that for the
-problem sizes considered it is optimal to choose $\mathcal{T}_\mathcal{H}$
-close to $\mathcal{T}_h$, leaving little room for improvement from an
-intermediate mesh. However, it is interesting to note that the classical choice
-$\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}$ performed poorly in two test cases
-($d=3$, $p\in \{1, 2\}$), while the massively parallel approach
-$\mathcal{T}_H=\mathcal{T}_h$ delivered timings close to the best ASM configurations
-considered across all tested problems.
+A study of the best meshing configurations for the hybrid solver reveals that
+the optimal choice always satisfies $\mathcal{T}_H=\mathcal{C}_m$ and
+$\mathcal{T}_\mathcal{H}\in \{\mathcal{C}_{m-1}, \mathcal{C}_m\}$, which is
+consistent with the conclusions of Section~\ref{sec:experiments-parallelism}.
+There we found that, since the coarse solver performs well even for fine
+$\mathcal{T}_\mathcal{H}$, it is optimal to choose
+it close to $\mathcal{T}_h$. This is particularly evident for $p\geq 3$: even
+with a fine $\mathcal{T}_\mathcal{H}$, the coarse problem remains much
+smaller than the original one becuase it uses constant elements.
 
 \section{Conclusions}
 
