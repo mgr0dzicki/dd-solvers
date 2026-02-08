@@ -1684,31 +1684,38 @@ smaller than the original one becuase it uses constant elements.
 
 \section{Conclusions}
 
-The subject of this thesis is the Additive Schwarz Method (ASM) preconditioner
-from \cite{Przykry} for the model elliptic problem \eqref{div_eq}. We adapted
-the original method to employ exact local solvers and to support higher-degree
-finite elements, and we presented in detail an algorithmic realization
-tailored for highly parallel architectures. The objective of the thesis
-was to provide an efficient single\nobreakdash-GPU implementation of this method and
+The subject of this work is the Schwarz method from \cite{Przykry} for the
+model elliptic problem \eqref{div_eq}. We adapted
+the original method to employ exact local solvers, extended it to support higher-degree
+finite elements, introduced a hybrid variant, and presented a detailed algorithmic realization
+tailored for highly parallel architectures. The objective of the paper
+was to provide an efficient single\nobreakdash-GPU implementation of the method and
 to evaluate its performance across a range of parameters, comparing the
-best results with the algebraic multigrid solvers from the NVIDIA AmgX library.
+best results with those obtained using the algebraic multigrid solvers from the NVIDIA AmgX library.
 
 Our implementation uses the PyTorch framework with
 several targeted optimizations
 that may be of independent interest. These include a~custom batched dense
-matrix-vector product kernel (which is $10-60\times$ faster than the PyTorch
+matrix-vector product kernel (which is $10-70\times$ faster than the PyTorch
 baseline for small matrix sizes) and a BSR matrix-vector product algorithm
-that outperforms cuSPARSE by up to $4.76\times$ for small block sizes.
+that outperforms cuSPARSE by up to $2.68\times$ for small block sizes.
 
 The experiments confirmed the expected convergence behaviour of the preconditioned
-ASM operator in the setting of higher-degree elements. They also showed that
+Schwarz operators in the setting of higher-degree elements. They also showed that
 appropriately chosen mixed-precision
 configuration have a negligible impact on convergence rate
 while providing speedups in the total solution time of
-up to $1.81\times$ relative to double precision.
+up to $1.92\times$ relative to double precision.
 
-A parameter study revealed that for the fixed coarse mesh the best performance
-is achieved for small or moderate local problems, which can be solved efficiently
+A comparison of the additive and hybrid variants showed that the latter
+consistently requires fewer iterations to converge, with a reduction up to
+a factor of $1.83\times$ for fixed mesh combinations. Since its cost per iteration
+is only moderately higher than that of the additive variant, the hybrid method is
+substantially faster, achieving speedups of up to $2.01\times$ for fixed mesh combinations
+and $1.61\times$ when the best configurations of both methods are compared.
+
+A parameter study revealed that, for the fixed coarse mesh, the best performance
+is achieved for small to moderate local problems, which can be solved efficiently
 using the explicit inverse dense batch solver. The three-grid
 variant can offer advantages over the two\nobreakdash-grid approach, particularly
 when the coarse mesh is substantially coarser than the fine mesh.
@@ -1719,9 +1726,9 @@ three\nobreakdash-grid method to be more beneficial for larger problems
 that do not fit on a~single GPU.
 
 Comparison with NVIDIA AmgX demonstrates that our ASM implementation is competitive:
-timings are comparable for 2D problems, while our method yields speedups up to $1.78\times$
-over AmgX for 3D problems. These findings attest to the potential of the considered ASM
-preconditioner and motivate further research in its highly parallel realizations.
+timings are comparable for 2D problems, while our method yields speedups up to $4.92\times$
+over AmgX for high-degree 3D problems. These findings attest to the potential of the considered Schwarz
+preconditioners and motivate further research in its highly parallel realizations.
 
 We identify several directions for future experimental work. First, the
 implementation can be further optimized by replacing PyTorch-level components
