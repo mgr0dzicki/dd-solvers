@@ -181,16 +181,14 @@ NVIDIA AmgX library.
 \section{Numerical Framework}
 \label{chap:theory}
 
-\todo{nieaktualne} The objective of this chapter is to present the mathematical foundations required for
-understanding and, henceforth, implementing an Additive Schwarz Method (ASM) solver for \eqref{div_eq}.
-Section~\ref{sec:variational-formulation} introduces the variational formulation
-of \eqref{div_eq}, which serves as the basis for the
-Discontinuous Galerkin (DG) discretization described in Section~\ref{sec:discretization}.
-In Section~\ref{sec:additive-schwarz-method}, we define
-the ASM preconditioner for the obtained discrete system and examine its key properties. Finally,
-Section~\ref{sec:preconditioner-alg} derives the detailed algorithmic procedure
-for applying the ASM preconditioner, which provides the foundation for the
-GPU\nobreakdash-accelerated implementation presented in Chapter~\ref{chap:implementation}.
+The objective of this section is to present the mathematical foundations required for
+implementing the Schwarz method for the problem \eqref{div_eq}. We begin by introducing the
+variational formulation, which serves as the basis for the
+Discontinuous Galerkin (DG) discretization. Next, we define the additive and hybrid
+Schwarz preconditioners for the obtained discrete system and examine their key properties.
+Finally, we derive the detailed algorithmic procedure
+for applying the Schwarz preconditioners, providing the foundation for the
+GPU\nobreakdash-accelerated implementation presented in Section~\ref{chap:implementation}.
 
 \subsection{Variational Formulation of the Problem}
 \label{sec:variational-formulation}
