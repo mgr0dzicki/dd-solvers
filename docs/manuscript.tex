@@ -753,135 +753,28 @@ Moreover, static parameters of the kernels, such as data types or the BSR block 
 need not be specified in advance, but can be inferred from the input tensors.
 Kernels are compiled on first invocation and then cached for all subsequent calls.
 
+Our solver comprises four main components: the additive or hybrid Schwarz
+operator, the coarse solver, the local solvers and the PCG method. The implementation
+of the Schwarz operators follows the algorithmic description in Section~\ref{sec:preconditioner-alg}
+and is discussed in detail in Section~\ref{sec:schwarz-preconditioners}.
+For the coarse solver we use the NVIDIA cuDSS library (v0.7.1)~\cite{cudss},
+a state-of-the-art direct sparse solver. The local problems are stored as
+dense matrices and solved using direct multiplication with their explicit inverses.
+This approach performed significantly better than the alternatives we considered, such
+as dense Cholesky factorization or batched sparse solvers; details are given
+in Section~\ref{sec:explicit-inverse-batch-solver}.
+Finally, the PCG method is implemented in a straightforward manner, leveraging the
+high-level linear-algebra operations provided by PyTorch. Since we focus
+on lightweight variants of the Schwarz preconditioners, the PCG cost
+if often dominated by the matrix-vector products with the system matrix $\bm{A}$.
+For this reason, we store $\bm{A}$ in the more efficient BSR format and implement
+a custom kernel for the matrix-vector product, as described in Section~\ref{sec:bsr-matrix-vector-product}.
+
 The complete code is included in the \texttt{dd\_solvers} package
 available on GitHub [???]. It was tested on the NVIDIA Docker container tagged as
 \texttt{nvcr.io/nvidia/pytorch:24.12-py3} \cite{pytorch-ngc}, which includes
 Python 3.12.3, PyTorch 2.6.0 and NVIDIA CUDA 12.6.3. All additional solver
 dependencies are specified in the accompanying \texttt{Dockerfile}.
-
-
-\subsection{Solvers Overview}
-\label{sec:solvers-overview}
-
-\begin{figure}
-  \centering
-  \includesvg[width=\textwidth]{solvers-uml}
-  \caption{Hierarchy of solvers. Solid lines indicate inheritance, dashed lines
-  -- composition.}
-  \label{fig:solvers-uml}
-\end{figure}
-
-The structure of the \texttt{dd\_solvers} package is illustrated in
-Figure~\ref{fig:solvers-uml}. It defines three abstract base classes -- \verb|SparseSolver|,
-\verb|DenseBatchSolver| and \verb|SparseBatchSolver| -- which specify
-interfaces for solvers handling a single CSR matrix, a batch of dense matrices,
-and a batch of CSR matrices, respectively. Because solvers of the same type share
-a common interface, they can be interchanged easily, facilitating performance
-comparisons.
-
-At the core of the package is the abstract class \texttt{SchwarzOperator},
-which encapsulates the shared components of the additive and hybrid Schwarz
-preconditioners, particularly the setup phase (Algorithm~\ref{preconditioner-setup-pseudocode}).
-The specific actions of $\bm{M_{add}}$ and $\bm{M_{hyb}^{loc}}$
-(Algorithms~\ref{preconditioner-M-pseudocode} and~\ref{preconditioner-M-hyb-pseudocode})
-are implemented in \texttt{AdditiveSchwarz} and \texttt{HybridSchwarz} classes, respectively;
-both derive from \texttt{SchwarzOperator}. The details are discussed
-in Section~\ref{sec:schwarz-preconditioners}.
-Schwarz operators are parametrized by
-the choice of coarse and local solvers: the coarse solver must subclass
-\texttt{SparseSolver}, while the local solver
-may be either a \texttt{DenseBatchSolver} or a \texttt{SparseBatchSolver}.
-Dense batch solvers are preferable for small local problems (e.g.
-$\mathcal{T}_H=\mathcal{T}_h$), whereas sparse solvers suit larger subdomains
-(e.g. $\mathcal{T}_H=\mathcal{T}_{\mathcal{H}}$).
-
-Since Schwarz operators are preconditioners, they must
-be used in conjunction with an iterative method. Following Section~\ref{sec:additive-schwarz-method}
-we employ the Preconditioned Conjugate Gradient (PCG) method.
-As a native PCG implementation is available in neither PyTorch nor cuSPARSE, we
-provide a custom implementation in the \texttt{CG} class.
-Any \verb|SparseSolver| can serve as a~preconditioner; setting this parameter
-to \verb|None| (default) yields an unpreconditioned CG solver.
-The implementation is described in Section~\ref{sec:cg-method}.
-
-In \verb|CUDSS| solver we provide a Python interface (with a C++ backend) to
-the NVIDIA cuDSS library (v0.7.1)~\cite{cudss}, which
-is a a high-performance direct sparse solver. As \verb|CUDSS| implements the \texttt{SparseSolver}
-interface, it can be used either as the coarse solver within \texttt{SchwarzOperator}
-or as a~standalone solver for \eqref{auf}.
-NVIDIA cuDSS can employ more efficient algorithms when the matrix
-is symmetric and positive definite. As it is the case for
-the stiffness matrix~$\bm{A}$, as well as for the coarse solver matrix $\bm{A_C}$,
-this option is enabled.
-
-Available dense batch solvers for the \verb|SchwarzOperator| local subproblems are
-\texttt{LU}, \texttt{Cholesky} and \texttt{Inv}, which implement LU decomposition,
-Cholesky factorization and direct multiplication by the inverse, respectively.
-The first two are thin wrappers around PyTorch's built-in batched solvers,
-while \texttt{Inv} is our custom implementation of the explicit inverse
-batch solver, described in Section~\ref{sec:explicit-inverse-batch-solver}.
-The sole sparse batch solver, \texttt{BatchCUDSS}, leverages
-the abilities of cuDSS to solve a batch of linear systems
-with matrices in the CSR format. As in \texttt{CUDSS}, the matrices are assumed
-to be symmetric and positive definite, which is the case for the local solvers'
-matrices $\bm{A_0}, ..., \bm{A_{N_H-1}}$.
-
-We also include a GPU-based algebraic multigrid preconditioner as our performance
-baseline. This preconditioner wraps the NVIDIA AmgX library \cite{amgx}
-via the \verb|pyamgx| bindings~\cite{pyamgx} and is provided by the \texttt{AMGX} class
-in our package. Configuration details are discussed
-in Section \ref{sec:amgx-preconditioner}.
-
-As will be later demonstrated in Section~\ref{chap:experiments}, applying the preconditioner
-in lower precision than the original matrix can deliver a significant performance
-improvement. Accordingly, we supplement the Schwarz
-preconditioners with two levels of precision control. First, the \texttt{precision}
-attribute of the \texttt{SchwarzOperator} class may be set to either \verb|float64| or
-\verb|float32|, which dictates the precision of the entire preconditioner
--- including both coarse and local solvers. Second, when the batch solver is a
-direct inverse, the \verb|precision| attribute of the \texttt{Inv} class can
-reduce the local solver's precision to 32 bits (\verb|float32|) or even 16 bits
-(\verb|bfloat16| or \verb|float16|). We also allow the \verb|AMGX| preconditioner
-to run in either single (\verb|float32|) or double (\verb|float64|) precision.
-
-We conclude this section by illustrating the flexibility of the \texttt{dd\_solvers}
-package with examples of constructing \texttt{SparseSolver} instances in
-Listing~\ref{lst:creating-solvers}.
-
-\begin{algorithm}
-\vspace{-3pt}
-\begin{lstlisting}[
-  caption={Example \texttt{SparseSolver} instances.},
-  label={lst:creating-solvers},
-  style=Python
-]
-# Example 1: Direct solver using cuDSS.
-s1 = CUDSS()
-
-# Example 2: Unpreconditioned CG solver with default settings.
-s2 = CG()
-
-# Example 3: PCG with AmgX preconditioner applied in single precision.
-s3 = CG(AMGX(precision=torch.float32))
-
-# Example 4: PCG with hybrid Schwarz preconditioner using sparse
-# direct solvers for both coarse and local problems.
-s4 = CG(HybridSchwarz(
-    coarse_solver=CUDSS(),
-    local_solver=BatchCUDSS(),
-))
-
-# Example 5: PCG with additive Schwarz preconditioner applied in
-# single precision, using dense local solver in a 16-bit precision.
-s5 = CG(AdditiveSchwarz(
-    precision=torch.float32,
-    coarse_solver=CUDSS(),
-    local_solver=Inv(precision=torch.float16),
-))
-\end{lstlisting}
-\vspace{-3pt}
-\end{algorithm}
-
 
 \subsection{Schwarz Preconditioners}
 \label{sec:schwarz-preconditioners}
@@ -907,12 +800,12 @@ the hybrid Schwarz preconditioner is implemented similarly.
 \begin{algorithm}
 \vspace{-3pt}
 \begin{lstlisting}[
-  caption={Implementation of preconditioner's multiplication by a vector.},
+  caption={Implementation of the additive Schwarz preconditioner.},
   label={lst:preconditioner-solve},
   style=Python
 ]
 @torch.compile
-def solve(self, x: torch.Tensor) -> torch.Tensor:          # $x\mapsto M_{add}x$
+def m_add(self, x: torch.Tensor) -> torch.Tensor:          # $x\mapsto M_{add}x$
   x_lower_precision = x.to(self.preconditioner_precision or x.dtype)
   x_i = x_lower_precision.reshape(self.n_solvers, -1)      # $x^{(i)} \gets R_i x$
   y_i = self.local_solvers.solve(x_i)                   # $y^{(i)} \gets A_i^{-1} x^{(i)}$
@@ -981,12 +874,12 @@ inexpensive approach for production use),
 an additional preprocessing step is required to
 permute the system matrix $\bm{A}$. Consequently, each solve also entails permuting
 the right-hand side vector $\bm{f}$ prior to, and the solution vector $\bm{u^*}$
-after a call to \verb|solve|. For such an occasion,
+after a call to the PCG method. For such an occasion,
 the \verb|dd_solvers| package supplies utility functions that perform these permutations
 efficiently, given the three mappings: from fine elements to unknowns, from
 fine elements to solver subdomains, and from solver subdomains to coarse elements.
 
-\subsection{Explicit Inverse Batch Solver}
+\subsection{Explicit Inverse Local Solver}
 \label{sec:explicit-inverse-batch-solver}
 
 Using the explicit inverse as a local solver in the Schwarz preconditioners
@@ -995,11 +888,9 @@ expensive setup than standard solvers based on factorizations such as LU or Chol
 Nevertheless, multiplication by the inverse exposes more parallelism than
 a triangular solve, as all elements of the output vector can be computed
 independently, which is particularly beneficial for highly\nobreakdash-parallel architectures
-such as GPUs. Therefore, we devoted additional effort to optimize the batch
-inverse solver.
+such as GPUs.
 
-Its implementation is provided by the \verb|Inv| class. The
-setup phase computes the batch of inverses
+The setup phase of the explicit inverse solver computes the batch of inverses
 $\bm{A_0}^{-1}, ..., \bm{A_{N_H-1}}^{-1}$ with a single call to \verb|torch.linalg.inv|.
 The local solvers' matrices and their inverses are stored as
 three-dimensional tensors of shape $(N_H, k, k)$, where $k$ is the number of
@@ -1016,22 +907,22 @@ operator \verb|@| or the function \verb|torch.bmm|, both of which call
 \verb|cublas<t>gemvStridedBatched| under the hood. Unfortunately, our
 experiments revealed that this cuBLAS
 function performs poorly for small matrix sizes ($k < 64$), which are typical for
-the massively parallel variants of the ASM preconditioner. We therefore provide our own
+the massively parallel variants of the Schwarz preconditioners. We therefore provide our own
 batched dense matrix-vector product implementation, described below.
 
-The \verb|Inv| class exposes a \verb|precision| attribute that permits internal
+The local solvers allow internal
 downcasting of the stored inverse matrices to lower precision, which can
 improve the performance of the solution phase. Regardless of the internal
-storage precision of the inverses, the output vectors $\bm{y^{(i)}}$ produced
-by the solver always has the same precision as the input vectors $\bm{x^{(i)}}$ (as dictated by
+storage precision of the inverses, the output vectors $\bm{y^{(i)}}$
+always has the same precision as the input vectors $\bm{x^{(i)}}$ (as dictated by
 the preconditioner), which may be either double (\verb|float64|) or
 single (\verb|float32|).
 
 \subsubsection{Batched Dense Matrix-Vector Product}
 \label{sec:batched-dense-matrix-vector-product}
 
-As an intermediate step in the \verb|Inv| implementation, we consider the following,
-slightly more general problem:
+As an intermediate step in the implementation of the local solvers, we consider
+the following, slightly more general problem:
 given a batch of $N$ matrices of size $k \times k$ (stored as a tensor $mat$ of shape $(N, k, k)$)
 and a batch of $N$ vectors of size $k$ (stored as a tensor $x$ of shape $(N, k)$),
 compute the batched matrix-vector product and return the result as another tensor of
@@ -1175,6 +1066,7 @@ for smallest matrices ($k\leq 5$ or $k\leq 15$ depending on the precision)
 and RPT-S otherwise.
 
 \subsection{BSR Matrix-Vector Product}
+\label{sec:bsr-matrix-vector-product}
 
 The per-iteration cost of the PCG method is dominated by two operations:
 the preconditioner solve and the sparse matrix-vector product. The latter can become
@@ -1190,11 +1082,8 @@ into dense square blocks of size $b\times b$, where the nonzero blocks themselve
 a sparse pattern. Consequently, $\bm{A}$ can be represented in the Block Sparse Row (BSR)
 format \cite[Section 3.3.6]{cusparse}. Compared to CSR, the BSR format reduces the size
 of the row-offset array by a factor of $b$ and the column-index array by a factor of $b^2$.
-
-Beyond memory savings, BSR format accelerates the matrix-vector
-product. To leverage this, the \verb|CG| class has an extra
-attribute \verb|bsr_matmul|, which enables the conversion of the matrix $\bm{A}$
-to the BSR format during the setup phase.
+Because sparse matrix-vector multiplication is typically memory-bound, these savings
+translate directly into improved matrix-vector performance.
 
 Multiple BSR matrix-vector algorithms are available.
 The simplest approach is to use \texttt{cusparse<t>bsrmv} routine from the
