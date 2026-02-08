@@ -93,7 +93,7 @@
 
 \section{Introduction}
 
-The objective of this thesis is to develop an efficient solver targeting
+The objective of this work is to develop an efficient solver targeting
 Graphics Processing Units (GPUs) \cite{cuda-guide} for the linear systems
 arising from the discretization of elliptic problems of the form
 \begin{equation}
@@ -110,7 +110,7 @@ and $u$ is the unknown (e.g. temperature).
 
 The number of unknowns in these systems can be extremely large, so exploiting the
 coefficient matrix's special properties is necessary.
-Specialized direct sparse solvers -- which perform a triangular
+Specialized direct sparse solvers -- which perform a~triangular
 decomposition -- cannot handle the largest systems. Therefore, iterative methods
 such as the Conjugate Gradient (CG), which compute only approximate solutions,
 must be used instead \cite{Saad}.
@@ -119,22 +119,22 @@ typically grows fast with the number of unknowns~\cite{Ern-FEM};
 effective preconditioners are therefore required to make an iterative method robust.
 While general-purpose preconditioners such as Jacobi, Gauss-Seidel,
 Incomplete LU or Incomplete Cholesky are available
-\cite{Saad, cusparse}, problem-specific approaches often deliver superior
+\cite{Saad, cusparse}, problem\nobreakdash-specific approaches often deliver superior
 performance.
 
 A broad class of such tailored preconditioners comprises domain decomposition
 methods~\cite{toselli}, which partition the domain $\Omega$ into smaller subdomains,
-solve local problems independently and then combine the results. In this thesis we
-implement the three-grid, two-level Additive Schwarz Method (ASM) proposed and
-analyzed in \cite{Przykry, Przykry-hp}. Designed as a preconditioner for the Discontinuous Galerkin
-(DG) discretization of \eqref{div_eq} \cite{Ern-dg,Ern-weighted-dg}, it is robust
+solve local problems independently and then combine the results. In this paper we
+implement the three-grid, two-level additive Schwarz method proposed and
+analyzed in \cite{Przykry, Przykry-hp}, as well as its hybrid variant
+inspired by \cite{toselli}. Designed as preconditioners for the Discontinuous Galerkin
+(DG) discretization of \eqref{div_eq} \cite{Ern-dg,Ern-weighted-dg}, they are robust
 with respect to discretization parameters even in the presence of jumps in~$\rho$.
-The DG discretization permits a~nonoverlapping ASM, which reduces coupling between
+The DG discretization permits a~nonoverlapping Schwarz method, which reduces coupling between
 local problems. This is particularly important for distributed-memory systems,
 since it minimizes inter-node communication, but is also beneficial
 for shared-memory architectures such as GPUs, as it reduces data dependencies
-and enables more parallelism.
-Moreover, the preconditioner
+and enables more parallelism. Moreover, the preconditioner
 construction allows a controlled balance between parallel scalability and
 preconditioner quality, including massively parallel variants potentially
 well-suited to GPUs~\cite{cuda-guide}.
@@ -152,28 +152,26 @@ existing CPU software to GPUs~\cite{Yamazaki}.
 Our approach differs in two key aspects. First, we target moderately sized problems
 that fit on a single GPU. We design our solver from the ground up for a GPU
 so that CPU does not participate in the solve phase and is used only for
-orchestration. Second, we implement the three-grid ASM~\cite{Przykry, Przykry-hp},
+orchestration. Second, we implement the three-grid Schwarz method~\cite{Przykry, Przykry-hp},
 which, to our knowledge, has not been ported to a GPU before. This allows
 us to consider highly parallel variants with millions of small subdomains,
 processing all of them simultaneously within a single GPU kernel; this design seems
-better suited to the GPU architecture \cite{cuda-guide}.\todo{coś o gpu vs cpu?}
-\todo{coś o pytorchu?}
+better suited to the GPU architecture \cite{cuda-guide}.
 
 We assume that the linear system $\bm{A} \bm{u^*} = \bm{f}$, resulting from the
 DG discretization of~\eqref{div_eq}, has already been assembled and is provided.
 Our first goal is to implement an efficient single\nobreakdash-GPU solver for this system,
-employing the preconditioned CG method accelerated by the ASM preconditioner.
+employing the preconditioned CG method accelerated by either the additive or the hybrid Schwarz preconditioner.
 Our second goal is to evaluate its performance across a range of parameters
-to identify the best-performing configurations and to compare it with the
-standard two-grid variant~\cite{classical-estimate}.
+to identify the best-performing configurations.
 Finally, we will compare the preconditioner and its implementation
 against NVIDIA's state-of-the-art GPU preconditioner -- AmgX \cite{amgx}.
 
-The thesis is organized as follows. Chapter~\ref{chap:theory} presents
-the mathematical foundations, defines the ASM preconditioner
-and derives its algorithmic realization. Chapter~\ref{chap:implementation}
-details the implementation of the preconditioner and other solver components,
-including the CG method. Finally, Chapter~\ref{chap:experiments} reports
+The paper is organized as follows. Section~\ref{chap:theory} presents
+the mathematical foundations, defines the Schwarz preconditioners
+and derives their algorithmic realization. Section~\ref{chap:implementation}
+details the implementation of the preconditioners and other solver components,
+including the CG method. Finally, Section~\ref{chap:experiments} reports
 experimental results across a range of parameter settings, identifies
 the best-performing configurations and compares them with the
 NVIDIA AmgX library.
