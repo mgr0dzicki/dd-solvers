@@ -1053,16 +1053,11 @@ float16$\times$float64) the difference is substantial.
 \end{figure}
 
 In contrast, the
-PyTorch implementation performs poorly at the smallest matrix sizes, being
-$10-70\times$ slower than ours for $k\leq 4$. Its throughput grows with $k$
-and becomes competitive around $k\approx 64$, with the exact threshold
-depending on the precision. However, the Schwarz preconditioners primarily targets
-smaller matrix sizes when a~\verb|DenseBatchSolver| is used. In
-Section~\ref{chap:experiments} we show that, in most scenarios, the optimal
-choice is $21\leq k\leq 60$\todo{czy na pewno?} with \verb|float16| precision
--- settings for which BMV-S is $1.43 - 4.75\times$ faster than PyTorch.
-Therefore we employ our kernels in the \verb|Inv| class, choosing BMV-I
-for smallest matrices ($k\leq 5$ or $k\leq 15$ depending on the precision)
+PyTorch implementation performs poorly for the smallest matrix sizes, being
+$10-70\times$ slower than ours for $k\leq 4$. Although its throughput grows with $k$,
+it never outperforms BMV\nobreakdash-S.
+We therefore employ our custom kernels in the local solvers, using BMV-I
+for the smallest matrices ($k\leq 5$ or $k\leq 15$, depending on the precision)
 and BMV-S otherwise.
 
 \subsection{BSR Matrix-Vector Product}
