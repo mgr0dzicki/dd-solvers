@@ -194,19 +194,9 @@ GPU\nobreakdash-accelerated implementation presented in Section~\ref{chap:implem
 Let $\Omega \subset \mathbb{R}^d$, where $d\in \{2, 3\}$, be an open, bounded
 polyhedral domain with Lipschitz boundary $\partial \Omega$. We denote by
 $(\cdot, \cdot)_{L^2(\Omega)}$ the inner product on $L^2(\Omega)$ and by
-$\| \cdot \|_{L^2(\Omega)}$ the corresponding norm:
-\[
-  (u, v)_{L^2(\Omega)} = \int_\Omega u(x) v(x)\, dx,\quad
-  \| u \|_{L^2(\Omega)} = (u, u)_{L^2(\Omega)}^{1/2},\quad
-  \forall u, v\in L^2(\Omega).
-\]
+$\| \cdot \|_{L^2(\Omega)}$ the corresponding norm.
 Similarly, we denote the norm and semi-norm on the Sobolev space $H^k(\Omega)$
-by $\|\cdot\|_{H^k(\Omega)}$ and $|\cdot|_{H^k(\Omega)}$, respectively,
-defined by
-\begin{equation*}
-  \|u\|_{H^k(\Omega)} = \left(\sum_{|\alpha| \leq k} \|D^\alpha u\|_{L^2(\Omega)}^2\right)^{1/2},\quad
-  |u|_{H^k(\Omega)} = \left(\sum_{|\alpha| = k} \|D^\alpha u\|_{L^2(\Omega)}^2 \right)^{1/2}.
-\end{equation*}
+by $\|\cdot\|_{H^k(\Omega)}$ and $|\cdot|_{H^k(\Omega)}$, respectively.
 
 We assume that
 ${f\in L^2(\Omega)}$, ${\rho\in L^\infty(\Omega)}$ are prescribed, and that there
@@ -329,7 +319,7 @@ the three-grid nonoverlapping Schwarz Method from~\cite{Przykry},
 which is tailored specifically for the system~\eqref{auf}.
 We now outline this construction.
 
-For this purpose we introduce two additional
+We introduce two additional
 partitions of~$\Omega$: \emph{local solvers' mesh} $\mathcal{T}_H=\{\Omega_0, ..., \Omega_{N_H-1}\}$ and
 \emph{coarse mesh} $\mathcal{T}_{\mathcal{H}}=\{D_0, ..., D_{N_{\mathcal{H}-1}}\}$.
 We assume the inclusion
@@ -338,10 +328,8 @@ We assume the inclusion
 \]
 in the sense that $\mathcal{T}_H$ is a refinement of $\mathcal{T}_{\mathcal{H}}$ and
 $\mathcal{T}_h$ is a refinement of $\mathcal{T}_H$ (see Figure~\ref{fig:mesh_examples}
-for examples).
-
-Following \cite{Przykry}, we decompose the finite element space $V_h$, hereafter
-denoted simply by $V$, into the sum
+for examples). Following \cite{Przykry}, we decompose the finite element space $V_h$,
+hereafter denoted simply by $V$, into the sum
 \begin{equation}
   V = V_C + \sum_{i=0}^{N_H-1} V_i,\label{V_decomp}
 \end{equation}
@@ -392,7 +380,7 @@ along with estimates of its condition number, are established in \cite{Przykry}
 and \cite{Przykry-hp}. These results can be extended to $T_{hyb}$ using tools
 from \cite{toselli}. Since the implementation is independent of the specific
 details, we omit them and proceed under the assumption that $\rho$, $\mathcal{T}_h$,
-$\mathcal{T}_H$ and $\mathcal{T}_{\mathcal{H}}$ are chosen such that
+$\mathcal{T}_H$ and $\mathcal{T}_{\mathcal{H}}$ are such that
 both $T_{add}$ and $T_{hyb}$ are SPD.
 
 We now derive a formula for the preconditioning matrices $\bm{M_{add}}$ and
@@ -1037,7 +1025,7 @@ BMV-I outperforms BMV-S only for a few smallest matrix sizes, where the
 overhead of synchronizing threads in BMV-S becomes significant.
 For $k\geq 16$, BMV-S is consistently faster
 than BMV-I, and for some precision combinations (for example
-float16$\times$float64) the difference is substantial.
+\verb|float16|$\times$\verb|float64|) the difference is substantial.
 
 \begin{figure}
   \centering
@@ -1236,7 +1224,7 @@ with \eqref{eq:add-cond-bound} and \eqref{eq:hyb-cond-bound} yields
   \kappa(T_{hyb})\lesssim \kappa(T_{add})\lesssim p^2 2^{m + M - 2\mathcal{M}}.\label{eq:cond-bound-m-M-M}
 \end{equation}
 
-Please note that the restriction to the particular domain $\Omega$, mesh families
+Note that the restriction to the particular domain $\Omega$, mesh families
 $\mathcal{T}_h, \mathcal{T}_H, \mathcal{T}_{\mathcal{H}}$ and coefficient $\rho$ is made solely for
 the sake of experimental evaluation. The choice of uniform meshes allows
 easy comparison of different granularities of parallelism, while the continuous coefficient
@@ -1255,7 +1243,7 @@ and the solution phase of the chosen solver. The computed solution of \eqref{auf
 may finally be transferred back to the CPU for further processing. The resulting solution
 is always computed in double precision, but lower\nobreakdash-precision arithmetic
 might be used internally by the preconditioner according to the choice of
-its parameters (see Section~\ref{sec:solvers-overview}).
+its parameters.
 
 The GPU we use to run all experiments in this section is an NVIDIA A100 SXM4 80GB.
 We use CUDA Events \cite[Section 3.2.8.8]{cuda-guide} to measure GPU timings.
@@ -1590,7 +1578,7 @@ For small problems our PCG implementation is slower than AmgX, owing to overhead
 from PyTorch and Python layers. Additional degradation occur when using BSR format,
 as our matrix-vector kernels are written in Numba and thus incur additional launching overhead.
 However, as the problem size grows, these overheads become negligible,
-and the throughput of AmgX PCG and our equivalent variant (fp64, CSR)
+and the throughput of AmgX PCG and our equivalent variant (\verb|fp64|, CSR)
 is nearly identical. Moreover, enabling mixed precision and using BSR format yields
 further improvements. The BSR format -- while particularly beneficial for Schwarz operators
 -- provides limited gains here, because the cost of applying the AmgX preconditioner
@@ -1711,8 +1699,8 @@ A comparison of the additive and hybrid variants showed that the latter
 consistently requires fewer iterations to converge, with a reduction up to
 a factor of $1.83\times$ for fixed mesh combinations. Since its cost per iteration
 is only moderately higher than that of the additive variant, the hybrid method is
-substantially faster, achieving speedups of up to $2.01\times$ for fixed mesh combinations
-and $1.61\times$ when the best configurations of both methods are compared.
+substantially faster, achieving speedups of up to $1.61\times$ when the best
+configurations of both methods are compared.
 
 A parameter study revealed that, for the fixed coarse mesh, the best performance
 is achieved for small to moderate local problems, which can be solved efficiently
@@ -1725,7 +1713,7 @@ little room for improvement by an intermediate mesh. We therefore expect the
 three\nobreakdash-grid method to be more beneficial for larger problems
 that do not fit on a~single GPU.
 
-Comparison with NVIDIA AmgX demonstrates that our ASM implementation is competitive:
+Comparison with NVIDIA AmgX demonstrated that our ASM implementation is competitive:
 timings are comparable for 2D problems, while our method yields speedups up to $4.92\times$
 over AmgX for high-degree 3D problems. These findings attest to the potential of the considered Schwarz
 preconditioners and motivate further research in its highly parallel realizations.
