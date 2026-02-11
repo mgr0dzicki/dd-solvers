@@ -43,7 +43,7 @@ a possible approach, promising a~high level of concurrency, is a Schwarz
 method based on three-grid, two-level domain decomposition \cite{Przykry},
 whose main ingredient is to solve a~very large number of independent local
 subproblems in parallel. The method was designed for a~discontinuous Galerkin
-approximation of the diffusion equation with high-contrast coefficient.
+approximation of the diffusion equation with a high-contrast coefficient.
 
 In this paper, we develop an implementation of the method on a single GPU.
 To identify the best\nobreakdash-performing configuration, we conduct a series of experiments in which
@@ -56,7 +56,7 @@ yields significant speedup with negligible impact on convergence.
 The obtained solver is highly efficient: individual components
 achieve $70-90\%$ of the measured peak memory bandwidth of an NVIDIA A100 GPU.
 A comparison with the state-of-the-art GPU-based AMG solver AmgX shows that our
-implementation delivers competetive solution times, especially
+implementation delivers competitive solution times, especially
 for high-degree 3D problems, where performance of AmgX degrades.
 Our results further demonstrate that even on a single A100 with 80GB of memory,
 the matrix-based approach is capable of solving even moderately large elliptic problems
