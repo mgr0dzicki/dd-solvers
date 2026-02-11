@@ -1,0 +1,69 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{hyperref}
+
+\geometry{
+	a4paper,
+	margin=20mm
+}
+
+\usepackage{lastpage}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+
+\usepackage[style=ieee, backend=biber, doi=false, isbn=false, eprint=false, url=false]{biblatex}
+\addbibresource{bibliography.bib}
+\appto\bibfont{\setlength{\emergencystretch}{.5em}}
+
+\fancyhf{}
+
+\allowdisplaybreaks
+
+\title{
+    A Nonoverlapping Three-Grid, Two-Level Schwarz Method on a Single GPU
+}
+\author{Mieszko Grodzicki}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+Relatively little work has been done so far on the efficiency of domain decomposition
+methods for PDEs on GPUs. This is partly because their usual coarse-grained
+parallelism does not map well to highly multithreaded GPUs. Therefore, methods
+capable of massive parallelism are preferable for GPU-based solvers. For elliptic PDEs,
+a possible approach, promising a~high level of concurrency, is a Schwarz
+method based on three-grid, two-level domain decomposition \cite{Przykry},
+whose main ingredient is to solve a~very large number of independent local
+subproblems in parallel. The method was designed for a~discontinuous Galerkin
+approximation of the diffusion equation with high-contrast coefficient.
+
+In this paper, we develop an implementation of the method on a single GPU.
+To identify the best\nobreakdash-performing configuration, we conduct a series of experiments in which
+we compare the additive and hybrid variants of the method, and investigate how
+the size of the local problems and the granularity of the coarse grid affect performance.
+We also introduce mixed-precision variants; in particular, we show
+that using half precision in the local solvers (for a double-precision problem)
+yields significant speedup with negligible impact on convergence.
+
+The obtained solver is highly efficient: individual components
+achieve $70-90\%$ of the measured peak memory bandwidth of an NVIDIA A100 GPU.
+A comparison with the state-of-the-art GPU-based AMG solver AmgX shows that our
+implementation delivers competetive solution times, especially
+for high-degree 3D problems, where performance of AmgX degrades.
+Our results further demonstrate that even on a single A100 with 80GB of memory,
+the matrix-based approach is capable of solving even moderately large elliptic problems
+-- up to 100M DoFs in 2D and 50M DoFs in 3D -- while readily handling variable
+coefficients and nonuniform meshes.
+
+% TODO: format referencji taki jak chca w artykule?
+\printbibliography
+
+\end{document}
