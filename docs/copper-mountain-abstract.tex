@@ -35,33 +35,26 @@
 
 \maketitle
 
-Relatively little work has been done so far on the efficiency of domain decomposition
-methods for PDEs on GPUs. This is partly because their usual coarse-grained
-parallelism does not map well to highly multithreaded GPUs. Therefore, methods
-capable of massive parallelism are preferable for GPU-based solvers. For elliptic PDEs,
-a possible approach, promising a~high level of concurrency, is a Schwarz
-method based on three-grid, two-level domain decomposition \cite{Przykry},
-whose main ingredient is to solve a~very large number of independent local
-subproblems in parallel. The method was designed for a~discontinuous Galerkin
-approximation of the diffusion equation with a high-contrast coefficient.
+Exploiting GPU processing power for numerical computation requires regular data
+structures and algorithms with a high degree of parallelism.
+In this paper, we implement a massively parallel domain decomposition method \cite{Przykry}
+and fine-tune the method's parameters for optimal efficiency on a~modern GPU.
+Using the standard PyTorch framework with a small set of custom CUDA kernels
+(such as a block sparse row matrix-vector product), we attain $70-90\%$ of the
+measured peak memory bandwidth of an NVIDIA A100 GPU on individual solver
+components. To further increase throughput, we leverage mixed-precision computation
+in several parts of the method. In particular, we demonstrate that using half precision
+in the subdomain solvers (for double-precision problems) yields substantial speedups
+with negligible impact on convergence.
 
-In this paper, we develop an implementation of the method on a single GPU.
-To identify the best\nobreakdash-performing configuration, we conduct a series of experiments in which
-we compare the additive and hybrid variants of the method, and investigate how
-the size of the local problems and the granularity of the coarse grid affect performance.
-We also introduce mixed-precision variants; in particular, we show
-that using half precision in the local solvers (for a double-precision problem)
-yields significant speedup with negligible impact on convergence.
-
-The obtained solver is highly efficient: individual components
-achieve $70-90\%$ of the measured peak memory bandwidth of an NVIDIA A100 GPU.
-A comparison with the state-of-the-art GPU-based AMG solver AmgX shows that our
-implementation delivers competitive solution times, especially
-for high-degree 3D problems, where performance of AmgX degrades.
-Our results further demonstrate that even on a single A100 with 80GB of memory,
-the matrix-based approach is capable of solving even moderately large elliptic problems
--- up to 100M DoFs in 2D and 50M DoFs in 3D -- while readily handling variable
-coefficients and nonuniform meshes.
+The resulting solver accepts the linear system explicitly as a sparse matrix, which
+enables straightforward handling of variable or high-contrast coefficients and nonuniform meshes.
+Despite the explicit input, the solver is memory efficient: systems derived from
+a~Discontinuous Galerkin discretization of elliptic problems with up to 100M degrees
+of freedom (DoFs) in 2D and 50M DoFs in 3D can be solved on a single A100 with 80GB of memory.
+The solver outperforms NVIDIA's AMG library, AmgX, in all tested scenarios,
+with a maximum speedup of $4.92\times$ observed in 3D when high-order elements are used
+for the discretization.
 
 % TODO: format referencji taki jak chca w artykule?
 \printbibliography
