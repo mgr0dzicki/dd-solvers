@@ -47,9 +47,9 @@ in several parts of the method. In particular, we demonstrate that using half pr
 in the subdomain solvers (for double-precision problems) yields substantial speedups
 with negligible impact on convergence.
 
-The resulting solver accepts the linear system explicitly as a sparse matrix, which
-enables straightforward handling of variable or high-contrast coefficients and nonuniform meshes.
-Despite the explicit input, the solver is memory efficient: systems derived from
+The resulting solver accepts the linear system explicitly as a sparse matrix, enabling
+straightforward handling of variable or high-contrast coefficients and non-uniform meshes.
+Despite the explicit input, the solver is memory-efficient: systems derived from
 a~Discontinuous Galerkin discretization of elliptic problems with up to 100M degrees
 of freedom (DoFs) in 2D and 50M DoFs in 3D can be solved on a single A100 with 80GB of memory.
 The solver outperforms NVIDIA's AMG library, AmgX, in all tested scenarios,
