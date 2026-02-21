@@ -12,10 +12,8 @@ installed without build isolation:
 pip install --no-build-isolation src/dd_solvers
 ```
 To ensure all dependencies are properly configured, we recommend using the Docker
-container defined in the `containers/` directory and available on DockerHub as:
-```
-mgrodzicki/dd-solvers:pytorch-24.12
-```
+container defined in `Dockerfile`. The latest image is available on Docker Hub
+as `mgrodzicki/dd-solvers:latest`.
 
 ## Benchmarks and Experiments
 
