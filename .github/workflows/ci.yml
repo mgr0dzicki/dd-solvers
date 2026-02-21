@@ -18,4 +18,4 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: mgrodzicki/dd-solvers:pytorch-24.12
+          tags: mgrodzicki/dd-solvers:latest

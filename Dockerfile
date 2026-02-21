@@ -28,7 +28,7 @@ RUN git clone --recursive https://github.com/NVIDIA/AMGX && \
     cd AMGX && \
     mkdir build && \
     cd build && \
-    cmake .. -DCUDA_ARCH="80 90" && \
+    cmake .. -DCUDA_ARCH="80;90" && \
     make -j 10 all
 
 RUN AMGX_DIR=/workspace/AMGX \
