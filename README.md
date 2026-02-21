@@ -1,16 +1,24 @@
-This repository contains an implementation of a single-GPU ASM solver
-developed as part of the thesis "A Nonoverlapping Additive Schwarz Method on a GPU".
+# Massively Parallel Domain Decomposition Preconditioner on a GPU: Efficient Implementation and Fine-Tuning
 
-The repository is organized as follows:
-- `src/`: Contains two Python packages:
-  - `dd_solvers/`: Implements the ASM solver, including its local and coarse
-    components, as well as the Preconditioned Conjugate Gradient method.
-  - `experiments/`: Provides utility functions for mesh generation, problem setup,
-    and running experiments.
-- `experiments/`: Contains Jupyter notebooks and Python scripts reproducing the
-  specific experiments described in the thesis.
-- `results/`: Stores the results generated from experiments.
-- `notebooks/`: Contains additional Jupyter notebooks for exploratory analysis
-  and visualization, i.e. producing figures for the thesis.
-- `containers/`: Includes source files for building Docker images to ensure
-  a consistent execution environment.
+This repository contains a single-GPU implementation of the Additive
+and Hybrid Schwarz methods for elliptic PDEs.
+
+## Installation
+
+The core solver is contained in the `dd_solvers` package located
+in `src/`. Since the package builds PyTorch C++ extensions, it must be
+installed without build isolation:
+```bash
+pip install --no-build-isolation src/dd_solvers
+```
+To ensure all dependencies are properly configured, we recommend using the Docker
+container defined in the `containers/` directory and available on DockerHub as:
+```
+mgrodzicki/dd-solvers:pytorch-24.12
+```
+
+## Benchmarks and Experiments
+
+Utilities for benchmarking the solver on the model problem are provided
+in the `src/experiments` package. Scripts for reproducing specific benchmarks
+are located in `experiments/`, while the obtained results are stored in `results/`.
