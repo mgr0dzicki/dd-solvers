@@ -1,0 +1,5 @@
+numpy
+scipy
+pybind11
+pandas
+jupyterlab==4.4.4

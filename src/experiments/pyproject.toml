@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "experiments"
+authors = [
+    {name = "Mieszko Grodzicki", email = "m.grodzicki@mimuw.edu.pl"}
+]
+description = "Tooling for running experiments with dd_solvers"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "dd_solvers",
+    "pandas",
+    "mpi4py",
+    "matplotlib",
+    "scipy",
+    "tqdm",
+]
