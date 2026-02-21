@@ -19,4 +19,3 @@ jobs:
           push: true
           tags: mgrodzicki/dd-solvers:pytorch-24.12
           context: "{{defaultContext}}:containers"
-          file: containers/Dockerfile
