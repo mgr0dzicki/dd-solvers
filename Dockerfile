@@ -6,7 +6,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # See https://github.com/openucx/ucc/issues/476#issuecomment-1766207267
 ENV LD_LIBRARY_PATH="/opt/hpcx/ucx/lib:$LD_LIBRARY_PATH"
 
-ADD src/ /workspace/
+ADD . /workspace
 WORKDIR /workspace
 
 RUN apt update && \
@@ -22,17 +22,21 @@ RUN add-apt-repository -y ppa:fenics-packages/fenics && \
     apt update && \
     apt install -y fenicsx
 
-RUN pip install -r /workspace/requirements.txt
+RUN pip install -r /workspace/container_src/requirements.txt
 
 RUN git clone --recursive https://github.com/NVIDIA/AMGX && \
     cd AMGX && \
     mkdir build && \
     cd build && \
-    cmake .. && \
+    cmake .. -DCUDA_ARCH="80 90" && \
     make -j 10 all
 
 RUN AMGX_DIR=/workspace/AMGX \
     pip install git+https://github.com/mgr0dzicki/pyamgx.git@allow_other_data_types
 
-RUN chmod +x /workspace/start.sh
-CMD ["/workspace/start.sh"]
+RUN pip install --no-build-isolation -e /workspace/src/dd_solvers
+
+RUN pip install -e /workspace/src/experiments
+
+RUN chmod +x /workspace/container_src/start.sh
+CMD ["/workspace/container_src/start.sh"]

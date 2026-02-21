@@ -1,5 +1,6 @@
 name: CI
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -18,4 +19,3 @@ jobs:
         with:
           push: true
           tags: mgrodzicki/dd-solvers:pytorch-24.12
-          context: "{{defaultContext}}:containers"
