@@ -6,7 +6,7 @@ and Hybrid Schwarz methods for elliptic PDEs.
 ## Installation
 
 The core solver is contained in the `dd_solvers` package located
-in `src/`. Since the package builds PyTorch C++ extensions, it must be
+in `src/`. Since the package builds PyTorch C&#8288;+&#8288;+ extensions, it must be
 installed without build isolation:
 ```bash
 pip install --no-build-isolation src/dd_solvers
