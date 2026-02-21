@@ -21,4 +21,5 @@ mgrodzicki/dd-solvers:pytorch-24.12
 
 Utilities for benchmarking the solver on the model problem are provided
 in the `src/experiments` package. Scripts for reproducing specific benchmarks
-are located in `experiments/`, while the obtained results are stored in `results/`.
+are located in `experiments/`, while the results obtained on the NVIDIA A100 GPU
+are stored in `results/`.
