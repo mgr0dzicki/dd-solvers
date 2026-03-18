@@ -482,7 +482,7 @@ def test(n, N, NN, overlap_n, coefficient="continuous", coefficient_param=None):
 
 # %%
 test_cases = []
-for m in range(5, 6):
+for m in range(8, 9):
     for M in range(4, m + 1):
         for MM in range(4, M + 1):
             for coefficient, coefficient_param in [
