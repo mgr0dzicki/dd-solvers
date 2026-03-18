@@ -190,6 +190,7 @@ class OverlappingSchwarz:
         self.n_solvers = len(solvers_to_fine)
 
         self.solver_dofs = [[] for _ in range(self.n_solvers)]
+        self.local_mult_matrices = [None] * self.n_solvers
         self.local_solvers = [None] * self.n_solvers
         for i in range(self.n_solvers):
             for el in solvers_to_fine[i]:
@@ -197,6 +198,7 @@ class OverlappingSchwarz:
                     self.solver_dofs[i].append(el * dofs_per_element + d)
             self.solver_dofs[i] = np.array(self.solver_dofs[i], dtype=np.int32)
             solver_matrix = matrix[self.solver_dofs[i]][:, self.solver_dofs[i]]
+            self.local_mult_matrices[i] = matrix[self.solver_dofs[i]]
             self.local_solvers[i] = sps.linalg.splu(solver_matrix.tocsc())
 
         self.matrix = matrix
@@ -221,6 +223,12 @@ class OverlappingSchwarz:
             .sum(axis=1)
         )
 
+    def Ri(self, i: int, x: np.ndarray):
+        return x[self.solver_dofs[i]]
+
+    def RiT(self, i: int, y_local: np.ndarray, out_add: np.ndarray):
+        out_add[self.solver_dofs[i]] += y_local
+
     def R0T(self, y_coarse: np.ndarray):
         y_hlp = np.zeros(self.matrix.shape[0] // self.dofs_per_element)
         y_hlp[self.coarse_to_fine] = y_coarse[:, None]
@@ -235,6 +243,15 @@ class OverlappingSchwarz:
         local_x = x[self.solver_dofs[i]]
         local_y = self.local_solvers[i].solve(local_x)
         out_add[self.solver_dofs[i]] += local_y
+
+    def Mi(self, i: int, x: np.ndarray, y: np.ndarray):
+        self.RiT(
+            i,
+            self.local_solvers[i].solve(
+                self.Ri(i, x) - self.local_mult_matrices[i] @ y
+            ),
+            y,
+        )
 
 # %%
 class AdditiveSchwarz(OverlappingSchwarz):
@@ -255,9 +272,9 @@ class MultiplicativeSymmetricSchwarz(OverlappingSchwarz):
     def solve(self, x: np.ndarray):
         y = self.P0(x)
         for i in range(self.n_solvers):
-            self.Pi(i, x - self.matrix @ y, y)
+            self.Mi(i, x, y)
         for i in reversed(range(self.n_solvers)):
-            self.Pi(i, x - self.matrix @ y, y)
+            self.Mi(i, x, y)
         return y, {}
 
 # %%
@@ -268,7 +285,7 @@ class MultiplicativeSchwarz(OverlappingSchwarz):
     def solve(self, x: np.ndarray):
         y = self.P0(x)
         for i in range(self.n_solvers):
-            self.Pi(i, x - self.matrix @ y, y)
+            self.Mi(i, x, y)
         return y, {}
 
 # %%
