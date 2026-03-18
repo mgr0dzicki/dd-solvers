@@ -416,7 +416,8 @@ def test(n, N, NN, overlap_n, coefficient="continuous", coefficient_param=None):
     results = []
     for preconditioner_cls in preconditioners:
         if preconditioner_cls.symmetric:
-            solvers = [GMRES, CG]
+            # solvers = [GMRES, CG]
+            solvers = [CG]
         else:
             solvers = [GMRES]
 
@@ -485,7 +486,7 @@ for m in range(5, 6):
     for M in range(4, m + 1):
         for MM in range(4, M + 1):
             for coefficient, coefficient_param in [
-                ("continuous", None),
+                # ("continuous", None),
                 ("constant", None),
                 ("coarse checkerboard", 1e6),
                 ("solvers checkerboard", 1e6),
