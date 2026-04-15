@@ -68,6 +68,7 @@ fi
 # Apply MPI workaround
 
 echo "Applying mpi4py workaround..."
+apt update
 apt remove -y python3-mpi4py
 apt install -y fenicsx
 
