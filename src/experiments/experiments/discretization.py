@@ -36,11 +36,12 @@ def discretize(
     assemble_approximate_form: bool = False,
 ) -> DiscreteProblem:
     V = fem.functionspace(mesh.dolfinx_mesh, ("DG", polynomial_degree))
+    V0 = fem.functionspace(mesh.dolfinx_mesh, ("DG", 0))
     delta_p2 = problem.delta * polynomial_degree**2
 
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    rho = fem.Function(V)
+    rho = fem.Function(V0)
     rho.interpolate(problem.rho)
 
     n = ufl.FacetNormal(mesh.dolfinx_mesh)
