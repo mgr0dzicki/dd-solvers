@@ -9,12 +9,12 @@ import torch
 
 d = 2
 p = 1
-fine_m = 5
-coefficient_param = 1e6
+fine_m = 10
+coefficient_param = 1e8
 
 cg_kwargs = {
     "maxiter": 400,
-    "rtol": 1e-6,
+    "rtol": 1e-8,
     "estimate_cond": True,
 }
 
@@ -30,13 +30,13 @@ problem = Problem(
 )
 
 test_case = TestCase(
-    "constant coefficient 2D",
+    "madness 2D",
     problem,
     constant_coefficient_2d.solution,
 )
 
 factory_kwargs = {
-    "test_case": continuous_coefficient_2d if d == 2 else continuous_coefficient_3d,
+    "test_case": test_case,
     "polynomial_degree": p,
     "setup_repetitions": 1,
     "solution_warmup_steps": 0,
@@ -50,7 +50,7 @@ solvers = []
 
 for amg_config in AMGX.preconditioner_config_names:
     solvers.append(CG(AMGX(amg_config), **cg_kwargs))
-    solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
+    # solvers.append(CG(AMGX(amg_config, torch.float32), **cg_kwargs))
 
 # Should be the last one as it can leave the GPU memory in an inconsistent
 # state in case of OOM errors.
