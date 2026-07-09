@@ -1,7 +1,11 @@
 # Massively Parallel Domain Decomposition Preconditioner on a GPU: Efficient Implementation and Fine-Tuning
 
-This repository contains a single-GPU implementation of the Additive
-and Hybrid Schwarz methods for elliptic PDEs.
+[![Preprint](https://img.shields.io/badge/Preprint-Read_PDF-blue.svg)](./preprint.pdf)
+
+This repository contains a single-GPU implementation of the Additive and Hybrid
+Schwarz methods for elliptic PDEs, as described in our accompanying paper.
+
+**[Read the Preprint PDF here](./preprint.pdf)**
 
 ## Installation
 
