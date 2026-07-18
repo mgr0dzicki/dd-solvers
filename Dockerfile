@@ -16,7 +16,11 @@ RUN UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d '"' -f 2 | tr -d '
     wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
     apt update && \
-    apt -y install cudss-cuda-12 libcudss0-dev-cuda-12
+    apt -y install \
+        cudss-cuda-12=0.7.1.4-1 \
+        libcudss0-cuda-12=0.7.1.4-1 \
+        libcudss0-dev-cuda-12=0.7.1.4-1 \
+        libcudss0-static-cuda-12=0.7.1.4-1
 
 RUN add-apt-repository -y ppa:fenics-packages/fenics && \
     apt update && \
