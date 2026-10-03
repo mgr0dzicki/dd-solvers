@@ -604,8 +604,7 @@ class SchwarzOperator(SparseSolver):
         self.n_solvers = int(self.solvers_per_coarse_scan[-1].item())
 
         self.use_segment_reduce = (
-            self.n_solvers
-            > self.SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE * self.n_coarse
+            self.n_solvers > self.SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE * self.n_coarse
         )
         if not self.use_segment_reduce:
             self.solvers_to_coarse = torch.arange(
