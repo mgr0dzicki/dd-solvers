@@ -25,7 +25,7 @@ factory_kwargs = {
 
 solvers = [
     CG(AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
-    CG(HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS()), **cg_kwargs),
+    CG(HybridSchwarz(torch.float32, Inv(torch.float16), CUDSS()), **cg_kwargs),
 ]
 
 results_path = f"../results/experiment_solvers.csv"

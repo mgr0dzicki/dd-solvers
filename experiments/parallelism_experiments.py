@@ -38,7 +38,7 @@ preconditioner_factory_kwargs = {
 def preconditioners(**kwargs):
     return [
         AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS(), **kwargs),
-        HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS(), **kwargs),
+        HybridSchwarz(torch.float32, Inv(torch.float16), CUDSS(), **kwargs),
     ]
 
 
