@@ -592,15 +592,21 @@ class SchwarzOperator(SparseSolver):
             events = [torch.cuda.Event(enable_timing=True) for _ in range(4)]
             events[0].record()
 
-        self.n_solvers = int(solvers_per_coarse.sum().item())
+        self.solvers_per_coarse_scan = torch.empty(
+            self.n_coarse + 1,
+            device=self.device,
+            dtype=torch.int32,
+        )
+        self.solvers_per_coarse_scan[0] = 0
+        self.solvers_per_coarse_scan[1:] = solvers_per_coarse.cumsum(dim=0)
+
+        self.n_solvers = int(self.solvers_per_coarse_scan[-1].item())
 
         self.use_segment_reduce = (
             self.n_solvers
             > self.SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE * self.n_coarse
         )
-        if self.use_segment_reduce:
-            self.solvers_per_coarse_scan = self._solvers_per_coarse_scan()
-        else:
+        if not self.use_segment_reduce:
             self.solvers_to_coarse = torch.arange(
                 self.n_coarse, device=self.device
             ).repeat_interleave(self.solvers_per_coarse, output_size=self.n_solvers)
@@ -649,16 +655,6 @@ class SchwarzOperator(SparseSolver):
 
     def destroy(self) -> None:
         self.coarse_solver.destroy()
-
-    def _solvers_per_coarse_scan(self) -> torch.Tensor:
-        scan = torch.empty(
-            self.n_coarse + 1,
-            device=self.device,
-            dtype=torch.int32,
-        )
-        scan[0] = 0
-        scan[1:] = self.solvers_per_coarse.cumsum(dim=0)
-        return scan
 
     def reduce_solvers_to_coarse(self, x_solvers: torch.Tensor) -> torch.Tensor:
         """Sums values of solvers over coarse subdomains."""
@@ -923,7 +919,7 @@ class HybridSchwarz(SchwarzOperator):
             sort_csr(
                 torch.sparse_csr_tensor(
                     crow_indices=Ap.crow_indices()[
-                        self._solvers_per_coarse_scan() * self.dofs_per_solver
+                        self.solvers_per_coarse_scan * self.dofs_per_solver
                     ],
                     col_indices=Ap.col_indices().clone(),
                     values=(
