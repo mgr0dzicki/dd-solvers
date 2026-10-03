@@ -556,9 +556,10 @@ class SchwarzOperator(SparseSolver):
     Assumes every solver has the same number of dofs.
     """
 
-    # Above this average number of solvers per coarse subdomain segment_reduce
-    # is faster than index_add_ for summing over coarse subdomains
-    # (see experiments/segment_reduce_vs_index_add.ipynb).
+    # Above this average number of solvers per coarse subdomain, segment_reduce
+    # is used instead of index_add_ for solvers-to-coarse reduction.
+    # Note: this is only a heuristic; however, for values close to the real
+    # threshold, both methods perform comparably, so it is sufficient.
     SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE = 48
 
     def __init__(
@@ -657,7 +658,6 @@ class SchwarzOperator(SparseSolver):
         self.coarse_solver.destroy()
 
     def reduce_solvers_to_coarse(self, x_solvers: torch.Tensor) -> torch.Tensor:
-        """Sums values of solvers over coarse subdomains."""
         if self.use_segment_reduce:
             return torch.segment_reduce(
                 x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
@@ -898,9 +898,6 @@ class HybridSchwarz(SchwarzOperator):
         res = self.local_solver.solve(
             x_lower_precision.reshape(self.n_solvers, -1)
         ).flatten()
-        # Coarse residual correction: without it the output is A-orthogonal to
-        # the coarse space, so rounding errors leaking into the coarse
-        # component of the residual are never reduced and CG stagnates.
         x_c = self.reduce_solvers_to_coarse(
             x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
         )
