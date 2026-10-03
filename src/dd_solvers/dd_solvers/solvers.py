@@ -915,28 +915,21 @@ class HybridSchwarz(SchwarzOperator):
         return res.to(rhs.dtype), {}
 
     def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
-        # Rows of A are summed in double precision and only the result is cast
-        # to the preconditioner precision.
-        R0A = gather_csr(
+        return gather_csr(
             sort_csr(
                 torch.sparse_csr_tensor(
                     crow_indices=Ap.crow_indices()[
                         self.solvers_per_coarse_scan * self.dofs_per_solver
                     ],
                     col_indices=Ap.col_indices().clone(),
-                    values=Ap.values().to(torch.float64, copy=True),
+                    values=(
+                        Ap.values().clone()
+                        if (self.preconditioner_precision or Ap.dtype) == Ap.dtype
+                        else Ap.values().to(self.preconditioner_precision)
+                    ),
                     size=(self.n_coarse, Ap.shape[1]),
                 )
             )
-        )
-        precision = self.preconditioner_precision or Ap.dtype
-        if R0A.dtype == precision:
-            return R0A
-        return torch.sparse_csr_tensor(
-            R0A.crow_indices(),
-            R0A.col_indices(),
-            R0A.values().to(precision),
-            R0A.shape,
         )
 
 
