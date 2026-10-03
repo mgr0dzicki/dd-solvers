@@ -556,6 +556,11 @@ class SchwarzOperator(SparseSolver):
     Assumes every solver has the same number of dofs.
     """
 
+    # Above this average number of solvers per coarse subdomain segment_reduce
+    # is faster than index_add_ for summing over coarse subdomains
+    # (see experiments/segment_reduce_vs_index_add.ipynb).
+    SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE = 48
+
     def __init__(
         self,
         preconditioner_precision: torch.dtype,
@@ -564,10 +569,6 @@ class SchwarzOperator(SparseSolver):
         collect_timings: bool = False,
     ):
         self.preconditioner_precision = preconditioner_precision
-        # Precisions in which the local and coarse matrices are assembled
-        # (and hence factorized/inverted). Subclasses may override them.
-        self.local_precision = preconditioner_precision
-        self.coarse_precision = preconditioner_precision
         self.local_solver = local_solver
         self.coarse_solver = coarse_solver
         self.collect_timings = collect_timings
@@ -601,6 +602,15 @@ class SchwarzOperator(SparseSolver):
 
         self.n_solvers = int(self.solvers_per_coarse_scan[-1].item())
 
+        self.use_segment_reduce = (
+            self.n_solvers
+            > self.SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE * self.n_coarse
+        )
+        if not self.use_segment_reduce:
+            self.solvers_to_coarse = torch.arange(
+                self.n_coarse, device=self.device
+            ).repeat_interleave(self.solvers_per_coarse, output_size=self.n_solvers)
+
         if self.collect_timings:
             events[1].record()
 
@@ -625,15 +635,13 @@ class SchwarzOperator(SparseSolver):
             torch.cuda.synchronize()
 
             x_c = torch.rand(
-                self.n_coarse,
-                device=self.device,
-                dtype=self.coarse_precision or matrix.dtype,
+                self.n_coarse, device=self.device, dtype=self.preconditioner_precision
             )
             coarse_solve_time = timeit(lambda: self.coarse_solver.solve(x_c))
             x_i = torch.rand(
                 (self.n_solvers, self.dofs_per_solver),
                 device=self.device,
-                dtype=self.local_precision or matrix.dtype,
+                dtype=self.preconditioner_precision,
             )
             local_solve_time = timeit(lambda: self.local_solver.solve(x_i))
 
@@ -648,11 +656,21 @@ class SchwarzOperator(SparseSolver):
     def destroy(self) -> None:
         self.coarse_solver.destroy()
 
+    def reduce_solvers_to_coarse(self, x_solvers: torch.Tensor) -> torch.Tensor:
+        """Sums values of solvers over coarse subdomains."""
+        if self.use_segment_reduce:
+            return torch.segment_reduce(
+                x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
+            )
+        return x_solvers.new_zeros(self.n_coarse).index_add_(
+            0, self.solvers_to_coarse, x_solvers
+        )
+
     def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
         A_i = torch.zeros(
             (self.n_solvers, self.dofs_per_solver, self.dofs_per_solver),
             device=self.device,
-            dtype=self.local_precision or Ap.values().dtype,
+            dtype=self.preconditioner_precision or Ap.values().dtype,
         )
 
         thread_block_size = 32
@@ -691,7 +709,7 @@ class SchwarzOperator(SparseSolver):
         values = torch.empty(
             total_count,
             device=self.device,
-            dtype=self.local_precision or Ap.values().dtype,
+            dtype=self.preconditioner_precision or Ap.values().dtype,
         )
         col_indices = torch.empty(
             total_count,
@@ -754,7 +772,7 @@ class SchwarzOperator(SparseSolver):
         values = torch.empty(
             total_blocks,
             device=self.device,
-            dtype=self.coarse_precision or Ap.values().dtype,
+            dtype=self.preconditioner_precision or Ap.values().dtype,
         )
         construct_coarse_solver_matrix_coo_kernel[grid_size, thread_block_size](
             self.dofs_per_solver,
@@ -821,9 +839,7 @@ class AdditiveSchwarz(SchwarzOperator):
         y_i = self.local_solver.solve(x_i)
         y = y_i.flatten()
         x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-        x_c = torch.segment_reduce(
-            x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
-        )
+        x_c = self.reduce_solvers_to_coarse(x_solvers)
         y_c, _ = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
@@ -833,50 +849,12 @@ class AdditiveSchwarz(SchwarzOperator):
 
 
 class HybridSchwarz(SchwarzOperator):
-    """
-    Precisions of the individual components can be lowered selectively via
-    `precisions`, a mapping from a component name to a dtype. Components which
-    are not given use `preconditioner_precision`:
-
-    - "local": assembly and inversion/factorization of the local matrices A_i
-      and the vectors passed to/returned by the local solver (the storage
-      precision of the local solver itself is controlled by the local solver,
-      e.g. `Inv(precision)`),
-    - "coarse": assembly, factorization and solves of the coarse matrix A_C,
-    - "R0A_assembly": summation of rows of A when assembling R_C A,
-    - "R0A": storage of R_C A (and R_C A^T) and its SpMV,
-    - "restriction": R_C, i.e. sums over coarse subdomains (used by T0 and the
-      initial projection),
-    - "prolongation": R_C^T and the update res - R_C^T y_C.
-
-    Without `coarse_residual_correction` the preconditioner is P^T M^{-1}
-    (DEF2, or P^T M^{-1} P with `initial_projection`), whose output is
-    A-orthogonal to the coarse space. The coarse component of the residual,
-    R_C r, is then never reduced, so rounding errors which leak into it (from
-    any inexact coarse-space operation) accumulate and CG stagnates. With
-    `coarse_residual_correction` the coarse residual R_C r is subtracted
-    before the coarse solve, which yields P^T M^{-1} + Q (A-DEF2, or BNN with
-    `initial_projection`) at no extra coarse solves.
-    """
-
-    COMPONENTS = (
-        "local",
-        "coarse",
-        "R0A_assembly",
-        "R0A",
-        "restriction",
-        "prolongation",
-    )
-
     def __init__(
         self,
         preconditioner_precision: torch.dtype,
         local_solver: DenseBatchSolver | SparseBatchSolver,
         coarse_solver: SparseSolver,
-        initial_projection: bool = False,
         collect_timings: bool = False,
-        precisions: dict[str, torch.dtype] | None = None,
-        coarse_residual_correction: bool = False,
     ):
         super().__init__(
             preconditioner_precision,
@@ -884,35 +862,9 @@ class HybridSchwarz(SchwarzOperator):
             coarse_solver,
             collect_timings,
         )
-        self.initial_projection = initial_projection
-        self.coarse_residual_correction = coarse_residual_correction
-
-        precisions = precisions or {}
-        unknown = set(precisions) - set(self.COMPONENTS)
-        if unknown:
-            raise ValueError(
-                f"Unknown components: {sorted(unknown)}, expected a subset of {self.COMPONENTS}."
-            )
-        self.precision_overrides = dict(precisions)
-        self.precisions = {
-            component: precisions.get(component, preconditioner_precision)
-            for component in self.COMPONENTS
-        }
-        self.local_precision = self.precisions["local"]
-        self.coarse_precision = self.precisions["coarse"]
 
     def __str__(self):
-        overrides = ", ".join(
-            f"{component}: {str(dtype).removeprefix('torch.')}"
-            for component, dtype in self.precision_overrides.items()
-            if dtype != self.preconditioner_precision
-        )
-        return (
-            f"HybridSchwarz({self.preconditioner_precision}, {self.local_solver}, {self.coarse_solver}, "
-            f"initial_projection={self.initial_projection}, "
-            f"coarse_residual_correction={self.coarse_residual_correction}, "
-            f"precisions={{{overrides}}})"
-        )
+        return f"HybridSchwarz({self.preconditioner_precision}, {self.local_solver}, {self.coarse_solver})"
 
     def setup(
         self,
@@ -922,73 +874,49 @@ class HybridSchwarz(SchwarzOperator):
         *args,
         **kwargs,
     ) -> None:
-        self.precisions = {
-            component: dtype or matrix.dtype
-            for component, dtype in self.precisions.items()
-        }
         timings = super().setup(
             matrix, dofs_per_solver, solvers_per_coarse, *args, **kwargs
         )
         self.R0A = self._construct_R0A_matrix(matrix)
-        self.solvers_to_coarse = torch.arange(
-            self.n_coarse, device=self.device
-        ).repeat_interleave(self.solvers_per_coarse)
-        if self.initial_projection:
-            # Materialize the transpose: sparse CSR views (R0A.T) fail under
-            # torch.compile (aten::as_strided has no SparseCsr kernel).
-            self.R0A_T = self.R0A.to_sparse_coo().t().coalesce().to_sparse_csr()
         return timings
 
-    def _restrict(self, x: torch.Tensor) -> torch.Tensor:
-        """R_C x"""
-        x_solvers = (
-            x.to(self.precisions["restriction"]).reshape(self.n_solvers, -1).sum(dim=1)
+    def T0(self, rhs: torch.Tensor) -> torch.Tensor:
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
+        x_c = self.reduce_solvers_to_coarse(
+            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
         )
-        # index_add_ instead of segment_reduce, which is ~40x slower when there
-        # are many coarse subdomains (e.g. one solver per coarse subdomain).
-        return x_solvers.new_zeros(self.n_coarse).index_add_(
-            0, self.solvers_to_coarse, x_solvers
-        )
-
-    def _coarse_solve(self, x_c: torch.Tensor) -> torch.Tensor:
-        y_c, _ = self.coarse_solver.solve(x_c.to(self.precisions["coarse"]))
-        return y_c
-
-    def _prolongate(self, y_c: torch.Tensor, n: int) -> torch.Tensor:
-        """R_C^T y_c"""
-        y_solvers = y_c.to(self.precisions["prolongation"]).repeat_interleave(
+        y_c, _ = self.coarse_solver.solve(x_c)
+        y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
         )
-        return y_solvers.repeat_interleave(self.dofs_per_solver, output_size=n)
-
-    def T0(self, rhs: torch.Tensor) -> torch.Tensor:
-        y_c = self._coarse_solve(self._restrict(rhs))
-        return self._prolongate(y_c, rhs.shape[0]).to(rhs.dtype)
+        y = y_solvers.repeat_interleave(self.dofs_per_solver, output_size=rhs.shape[0])
+        return y.to(rhs.dtype)
 
     @torch.compile
     def solve(self, rhs: torch.Tensor) -> Tuple[torch.Tensor, Metadata]:
-        x = rhs
-        if self.initial_projection:
-            y_c = self._coarse_solve(self._restrict(rhs))
-            R0A_precision = self.precisions["R0A"]
-            # Out-of-place: the cast may alias rhs.
-            x = rhs.to(R0A_precision) - self.R0A_T @ y_c.to(R0A_precision)
-
+        x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
         res = self.local_solver.solve(
-            x.to(self.precisions["local"]).reshape(self.n_solvers, -1)
+            x_lower_precision.reshape(self.n_solvers, -1)
         ).flatten()
-        z = self.R0A @ res.to(self.precisions["R0A"])
-        if self.coarse_residual_correction:
-            z = z - self._restrict(rhs).to(self.precisions["R0A"])
-        y_c = self._coarse_solve(z)
-        # Out-of-place: the cast may alias res.
-        res = res.to(self.precisions["prolongation"]) - self._prolongate(
-            y_c, res.shape[0]
+        # Coarse residual correction: without it the output is A-orthogonal to
+        # the coarse space, so rounding errors leaking into the coarse
+        # component of the residual are never reduced and CG stagnates.
+        x_c = self.reduce_solvers_to_coarse(
+            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+        )
+        z = self.R0A @ res - x_c
+        y_c, _ = self.coarse_solver.solve(z)
+        y_solvers = y_c.repeat_interleave(
+            self.solvers_per_coarse, output_size=self.n_solvers
+        )
+        res -= y_solvers.repeat_interleave(
+            self.dofs_per_solver, output_size=res.shape[0]
         )
         return res.to(rhs.dtype), {}
 
     def _construct_R0A_matrix(self, Ap: torch.Tensor) -> torch.Tensor:
-        assembly_precision = self.precisions["R0A_assembly"]
+        # Rows of A are summed in double precision and only the result is cast
+        # to the preconditioner precision.
         R0A = gather_csr(
             sort_csr(
                 torch.sparse_csr_tensor(
@@ -996,21 +924,18 @@ class HybridSchwarz(SchwarzOperator):
                         self.solvers_per_coarse_scan * self.dofs_per_solver
                     ],
                     col_indices=Ap.col_indices().clone(),
-                    values=(
-                        Ap.values().clone()
-                        if assembly_precision == Ap.dtype
-                        else Ap.values().to(assembly_precision)
-                    ),
+                    values=Ap.values().to(torch.float64, copy=True),
                     size=(self.n_coarse, Ap.shape[1]),
                 )
             )
         )
-        if self.precisions["R0A"] == R0A.dtype:
+        precision = self.preconditioner_precision or Ap.dtype
+        if R0A.dtype == precision:
             return R0A
         return torch.sparse_csr_tensor(
             R0A.crow_indices(),
             R0A.col_indices(),
-            R0A.values().to(self.precisions["R0A"]),
+            R0A.values().to(precision),
             R0A.shape,
         )
 
