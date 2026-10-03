@@ -42,7 +42,7 @@ def preconditioners(**kwargs):
     ]
 
 
-results_path = f"../results/experiment_parallelism_d{d}_p{p}_f{fine_m}.csv"
+results_path = f"../results/experiment_parallelism.csv"
 print("results path: ", results_path)
 
 print("Generating mesh family...")
