@@ -654,14 +654,24 @@ class SchwarzOperator(SparseSolver):
     def destroy(self) -> None:
         self.coarse_solver.destroy()
 
-    def reduce_solvers_to_coarse(self, x_solvers: torch.Tensor) -> torch.Tensor:
+    def reduce_solvers_to_coarse(
+        self, x_solvers: torch.Tensor, out_sub: torch.Tensor | None = None
+    ) -> torch.Tensor | None:
         if self.use_segment_reduce:
-            return torch.segment_reduce(
+            res = torch.segment_reduce(
                 x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
             )
-        return x_solvers.new_zeros(self.n_coarse).index_add_(
-            0, self.solvers_to_coarse, x_solvers
-        )
+            if out_sub is None:
+                return res
+            else:
+                out_sub -= res
+        else:
+            if out_sub is None:
+                return x_solvers.new_zeros(self.n_coarse).index_add_(
+                    0, self.solvers_to_coarse, x_solvers
+                )
+            else:
+                out_sub.index_add_(0, self.solvers_to_coarse, x_solvers, alpha=-1)
 
     def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
         A_i = torch.zeros(
@@ -895,10 +905,10 @@ class HybridSchwarz(SchwarzOperator):
         res = self.local_solver.solve(
             x_lower_precision.reshape(self.n_solvers, -1)
         ).flatten()
-        x_c = self.reduce_solvers_to_coarse(
-            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
+        z = self.R0A @ res
+        self.reduce_solvers_to_coarse(
+            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1), out_sub=z
         )
-        z = self.R0A @ res - x_c
         y_c, _ = self.coarse_solver.solve(z)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
