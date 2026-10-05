@@ -556,11 +556,9 @@ class SchwarzOperator(SparseSolver):
     Assumes every solver has the same number of dofs.
     """
 
-    # Above this average number of solvers per coarse subdomain, segment_reduce
-    # is used instead of index_add_ for solvers-to-coarse reduction.
-    # Note: this is only a heuristic; however, for values close to the real
-    # threshold, both methods perform comparably, so it is sufficient.
-    SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE = 48
+    # Below this average number of solvers per coarse subdomain index_add_
+    # is expected to perform significantly better than segment_reduce.
+    SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE = 24
 
     def __init__(
         self,
