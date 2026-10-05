@@ -1,15 +1,14 @@
 # For smaller problems run both AmgX and cuDSS solvers
-for m in {8..11}; do python test_reference_solvers.py 2 1 $m ; done
-for m in {6..10}; do python test_reference_solvers.py 2 2 $m ; done
-for m in {6..9}; do python test_reference_solvers.py 2 3 $m ; done
-for m in {5..9}; do python test_reference_solvers.py 2 4 $m ; done
-for m in {5..8}; do python test_reference_solvers.py 2 5 $m ; done
-
-for m in {3..6}; do python test_reference_solvers.py 3 1 $m ; done
-for m in {2..5}; do python test_reference_solvers.py 3 2 $m ; done
-for m in {1..4}; do python test_reference_solvers.py 3 3 $m ; done
-for m in {1..4}; do python test_reference_solvers.py 3 4 $m ; done
-for m in {1..3}; do python test_reference_solvers.py 3 5 $m ; done
+python test_reference_solvers.py 2 1 11
+python test_reference_solvers.py 2 2 10
+python test_reference_solvers.py 2 3 9
+python test_reference_solvers.py 2 4 9
+python test_reference_solvers.py 2 5 8
+python test_reference_solvers.py 3 1 6
+python test_reference_solvers.py 3 2 5
+python test_reference_solvers.py 3 3 4
+python test_reference_solvers.py 3 4 4
+python test_reference_solvers.py 3 5 3
 
 
 # For the largest ones run only AmgX first
