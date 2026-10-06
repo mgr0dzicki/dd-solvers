@@ -1136,9 +1136,9 @@ class AMGX(SparseSolver):
         return x_lower.to(rhs.dtype), {}
 
     def destroy(self) -> None:
-        self.matrix.destroy()
-        self.b.destroy()
-        self.x.destroy()
-        self.solver.destroy()
-        self.rsc.destroy()
-        self.config.destroy()
+        # Also called after a failed (partial) setup, so skip what was not created.
+        for name in ("matrix", "b", "x", "solver", "rsc", "config"):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                obj.destroy()
+                setattr(self, name, None)
