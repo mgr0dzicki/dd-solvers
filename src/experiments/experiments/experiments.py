@@ -232,54 +232,60 @@ class ExperimentFactory:
             )
         else:
             kwargs = dict()
-        setup_metadata = solver.setup(
-            matrix_holder.pop(),
-            **kwargs,
-            block_size=discrete_problem.function_space.dofmap.list.shape[1],
-        )
+        try:
+            setup_metadata = solver.setup(
+                matrix_holder.pop(),
+                **kwargs,
+                block_size=discrete_problem.function_space.dofmap.list.shape[1],
+            )
 
-        events[3].record()
-        if self.random_rhs:
-            cpu_rhs = np.random.rand(discrete_problem.load_vector.shape[0])
-            cpu_rhs = (cpu_rhs - 0.5) * 2
-        else:
-            cpu_rhs = discrete_problem.load_vector
-        rhs = torch.as_tensor(cpu_rhs).cuda()
-        if dd_solver:
-            rhs = rhs[perm]
-        events[4].record()
+            events[3].record()
+            if self.random_rhs:
+                cpu_rhs = np.random.rand(discrete_problem.load_vector.shape[0])
+                cpu_rhs = (cpu_rhs - 0.5) * 2
+            else:
+                cpu_rhs = discrete_problem.load_vector
+            rhs = torch.as_tensor(cpu_rhs).cuda()
+            if dd_solver:
+                rhs = rhs[perm]
+            events[4].record()
 
-        if measure_solution_time:
-            solve_times = []
-            for _ in range(self.solution_repetitions):
-                start = torch.cuda.Event(enable_timing=True)
-                end = torch.cuda.Event(enable_timing=True)
+            if measure_solution_time:
+                solve_times = []
+                for _ in range(self.solution_repetitions):
+                    start = torch.cuda.Event(enable_timing=True)
+                    end = torch.cuda.Event(enable_timing=True)
 
-                for _ in range(self.solution_warmup_steps):
-                    solver.solve(rhs)
+                    for _ in range(self.solution_warmup_steps):
+                        solver.solve(rhs)
 
-                start.record()
-                for _ in range(self.solution_measurement_steps):
-                    sol, metadata = solver.solve(rhs)
-                end.record()
+                    start.record()
+                    for _ in range(self.solution_measurement_steps):
+                        sol, metadata = solver.solve(rhs)
+                    end.record()
 
-                torch.cuda.synchronize()
-                solve_times.append(
-                    start.elapsed_time(end) / self.solution_measurement_steps
-                )
-        else:
-            sol, metadata = solver.solve(rhs)
-            solve_times = []
+                    torch.cuda.synchronize()
+                    solve_times.append(
+                        start.elapsed_time(end) / self.solution_measurement_steps
+                    )
+            else:
+                sol, metadata = solver.solve(rhs)
+                solve_times = []
 
-        events[5].record()
-        if dd_solver:
-            sol = sol[inv_perm]
-        cpu_sol = sol.cpu().numpy()
+            events[5].record()
+            if dd_solver:
+                sol = sol[inv_perm]
+            cpu_sol = sol.cpu().numpy()
 
-        events[6].record()
-        torch.cuda.synchronize()
+            events[6].record()
+            torch.cuda.synchronize()
 
-        solver.destroy()
+            solver.destroy()
+        except BaseException:
+            # Otherwise resources held outside of PyTorch (e.g. by AmgX) leak
+            # and cause failures of all the subsequent experiments.
+            solver.destroy()
+            raise
 
         residual_norm = np.linalg.norm(
             discrete_problem.exact_form_matrix @ cpu_sol - cpu_rhs

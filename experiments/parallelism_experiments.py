@@ -38,11 +38,11 @@ preconditioner_factory_kwargs = {
 def preconditioners(**kwargs):
     return [
         AdditiveSchwarz(torch.float32, Inv(torch.float16), CUDSS(), **kwargs),
-        HybridSchwarz(torch.float64, Inv(torch.float16), CUDSS(), **kwargs),
+        HybridSchwarz(torch.float32, Inv(torch.float16), CUDSS(), **kwargs),
     ]
 
 
-results_path = f"../results/experiment_parallelism_d{d}_p{p}_f{fine_m}.csv"
+results_path = f"../results/experiment_parallelism.csv"
 print("results path: ", results_path)
 
 print("Generating mesh family...")

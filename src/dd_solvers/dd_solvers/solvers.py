@@ -556,6 +556,10 @@ class SchwarzOperator(SparseSolver):
     Assumes every solver has the same number of dofs.
     """
 
+    # Below this average number of solvers per coarse subdomain index_add_
+    # is expected to perform significantly better than segment_reduce.
+    SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE = 24
+
     def __init__(
         self,
         preconditioner_precision: torch.dtype,
@@ -596,6 +600,14 @@ class SchwarzOperator(SparseSolver):
         self.solvers_per_coarse_scan[1:] = solvers_per_coarse.cumsum(dim=0)
 
         self.n_solvers = int(self.solvers_per_coarse_scan[-1].item())
+
+        self.use_segment_reduce = (
+            self.n_solvers > self.SEGMENT_REDUCE_MIN_SOLVERS_PER_COARSE * self.n_coarse
+        )
+        if not self.use_segment_reduce:
+            self.solvers_to_coarse = torch.arange(
+                self.n_coarse, device=self.device
+            ).repeat_interleave(self.solvers_per_coarse, output_size=self.n_solvers)
 
         if self.collect_timings:
             events[1].record()
@@ -641,6 +653,25 @@ class SchwarzOperator(SparseSolver):
 
     def destroy(self) -> None:
         self.coarse_solver.destroy()
+
+    def reduce_solvers_to_coarse(
+        self, x_solvers: torch.Tensor, out_sub: torch.Tensor | None = None
+    ) -> torch.Tensor | None:
+        if self.use_segment_reduce:
+            res = torch.segment_reduce(
+                x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
+            )
+            if out_sub is None:
+                return res
+            else:
+                out_sub -= res
+        else:
+            if out_sub is None:
+                return x_solvers.new_zeros(self.n_coarse).index_add_(
+                    0, self.solvers_to_coarse, x_solvers
+                )
+            else:
+                out_sub.index_add_(0, self.solvers_to_coarse, x_solvers, alpha=-1)
 
     def _construct_local_solvers_matrices_dense(self, Ap: torch.Tensor) -> torch.Tensor:
         A_i = torch.zeros(
@@ -815,9 +846,7 @@ class AdditiveSchwarz(SchwarzOperator):
         y_i = self.local_solver.solve(x_i)
         y = y_i.flatten()
         x_solvers = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-        x_c = torch.segment_reduce(
-            x_solvers, reduce="sum", offsets=self.solvers_per_coarse_scan
-        )
+        x_c = self.reduce_solvers_to_coarse(x_solvers)
         y_c, _ = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
@@ -860,9 +889,8 @@ class HybridSchwarz(SchwarzOperator):
 
     def T0(self, rhs: torch.Tensor) -> torch.Tensor:
         x_lower_precision = rhs.to(self.preconditioner_precision or rhs.dtype)
-        x_c = x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
-        x_c = torch.segment_reduce(
-            x_c, reduce="sum", offsets=self.solvers_per_coarse_scan
+        x_c = self.reduce_solvers_to_coarse(
+            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1)
         )
         y_c, _ = self.coarse_solver.solve(x_c)
         y_solvers = y_c.repeat_interleave(
@@ -878,6 +906,9 @@ class HybridSchwarz(SchwarzOperator):
             x_lower_precision.reshape(self.n_solvers, -1)
         ).flatten()
         z = self.R0A @ res
+        self.reduce_solvers_to_coarse(
+            x_lower_precision.reshape(self.n_solvers, -1).sum(dim=1), out_sub=z
+        )
         y_c, _ = self.coarse_solver.solve(z)
         y_solvers = y_c.repeat_interleave(
             self.solvers_per_coarse, output_size=self.n_solvers
@@ -897,7 +928,7 @@ class HybridSchwarz(SchwarzOperator):
                     col_indices=Ap.col_indices().clone(),
                     values=(
                         Ap.values().clone()
-                        if self.preconditioner_precision == Ap.dtype
+                        if (self.preconditioner_precision or Ap.dtype) == Ap.dtype
                         else Ap.values().to(self.preconditioner_precision)
                     ),
                     size=(self.n_coarse, Ap.shape[1]),
@@ -1105,9 +1136,9 @@ class AMGX(SparseSolver):
         return x_lower.to(rhs.dtype), {}
 
     def destroy(self) -> None:
-        self.matrix.destroy()
-        self.b.destroy()
-        self.x.destroy()
-        self.solver.destroy()
-        self.rsc.destroy()
-        self.config.destroy()
+        # Also called after a failed (partial) setup, so skip what was not created.
+        for name in ("matrix", "b", "x", "solver", "rsc", "config"):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                obj.destroy()
+                setattr(self, name, None)

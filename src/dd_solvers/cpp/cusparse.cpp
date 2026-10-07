@@ -36,21 +36,24 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int bufferSize;
   if (values.dtype() == at::kFloat) {
     CHECK_CUSPARSE(cusparseScsr2gebsr_bufferSize(
-        cusparseHandle, blockDir, m, n, descrA,
-        values.data_ptr<float>(), rowStart.data_ptr<int>(),
-        colIndices.data_ptr<int>(), blockSize, blockSize, &bufferSize));
+        cusparseHandle, blockDir, m, n, descrA, values.data_ptr<float>(),
+        rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), blockSize,
+        blockSize, &bufferSize));
   } else if (values.dtype() == at::kDouble) {
     CHECK_CUSPARSE(cusparseDcsr2gebsr_bufferSize(
-        cusparseHandle, blockDir, m, n, descrA,
-        values.data_ptr<double>(), rowStart.data_ptr<int>(),
-        colIndices.data_ptr<int>(), blockSize, blockSize, &bufferSize));
+        cusparseHandle, blockDir, m, n, descrA, values.data_ptr<double>(),
+        rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), blockSize,
+        blockSize, &bufferSize));
   } else {
     throw std::invalid_argument(
         "Unsupported values data type. Only float and double are supported.");
   }
 
-  void* buffer;
-  CHECK_CUDA(cudaMalloc(&buffer, bufferSize));
+  // Allocated through PyTorch, so that it is freed also when an exception is
+  // thrown, and so that memory cached by PyTorch's allocator can be reused.
+  at::Tensor bufferTensor = at::empty(
+      {bufferSize}, at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+  void* buffer = bufferTensor.mutable_data_ptr();
 
   at::Tensor bsrRowPtr = at::empty(
       {mb + 1}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
@@ -59,9 +62,9 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
   int nnzb;
   int* nnzTotalDevHostPtr = &nnzb;
   CHECK_CUSPARSE(cusparseXcsr2gebsrNnz(
-      cusparseHandle, blockDir, m, n, descrA,
-      rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), descrC, bsrRowPtrC,
-      blockSize, blockSize, nnzTotalDevHostPtr, buffer));
+      cusparseHandle, blockDir, m, n, descrA, rowStart.data_ptr<int>(),
+      colIndices.data_ptr<int>(), descrC, bsrRowPtrC, blockSize, blockSize,
+      nnzTotalDevHostPtr, buffer));
 
   if (nnzTotalDevHostPtr != nullptr) {
     nnzb = *nnzTotalDevHostPtr;
@@ -78,26 +81,26 @@ at::Tensor csrToBsr(const at::Tensor& csrMatrix, int64_t blockSize) {
       at::empty({nnzb}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
   int* bsrColIndC = bsrColInd.mutable_data_ptr<int>();
 
-  at::Tensor bsrValues =
-      at::empty_strided({nnzb, blockSize, blockSize}, {blockSize * blockSize, 1, blockSize}, // column-major
-                at::TensorOptions().dtype(values.dtype()).device(at::kCUDA));
+  at::Tensor bsrValues = at::empty_strided(
+      {nnzb, blockSize, blockSize},
+      {blockSize * blockSize, 1, blockSize},  // column-major
+      at::TensorOptions().dtype(values.dtype()).device(at::kCUDA));
   void* bsrValC = bsrValues.mutable_data_ptr();
 
   if (values.dtype() == at::kFloat) {
     CHECK_CUSPARSE(cusparseScsr2gebsr(
-        cusparseHandle, blockDir, m, n, descrA,
-        values.data_ptr<float>(), rowStart.data_ptr<int>(),
-        colIndices.data_ptr<int>(), descrC, reinterpret_cast<float*>(bsrValC),
-        bsrRowPtrC, bsrColIndC, blockSize, blockSize, buffer));
+        cusparseHandle, blockDir, m, n, descrA, values.data_ptr<float>(),
+        rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), descrC,
+        reinterpret_cast<float*>(bsrValC), bsrRowPtrC, bsrColIndC, blockSize,
+        blockSize, buffer));
   } else {
     CHECK_CUSPARSE(cusparseDcsr2gebsr(
-        cusparseHandle, blockDir, m, n, descrA,
-        values.data_ptr<double>(), rowStart.data_ptr<int>(),
-        colIndices.data_ptr<int>(), descrC, reinterpret_cast<double*>(bsrValC),
-        bsrRowPtrC, bsrColIndC, blockSize, blockSize, buffer));
+        cusparseHandle, blockDir, m, n, descrA, values.data_ptr<double>(),
+        rowStart.data_ptr<int>(), colIndices.data_ptr<int>(), descrC,
+        reinterpret_cast<double*>(bsrValC), bsrRowPtrC, bsrColIndC, blockSize,
+        blockSize, buffer));
   }
 
-  CHECK_CUDA(cudaFree(buffer));
   CHECK_CUSPARSE(cusparseDestroyMatDescr(descrA));
   CHECK_CUSPARSE(cusparseDestroyMatDescr(descrC));
 
@@ -113,8 +116,6 @@ at::Tensor sortCsr(at::Tensor& csrMatrix) {
   const int nnz = csrMatrix.values().size(0);
 
   size_t pBufferSizeInBytes = 0;
-  void* pBuffer = nullptr;
-  int* P = nullptr;
 
   auto [valuesCudaType, valuesPtr] = valuesToCudaDataType(csrMatrix.values());
   at::Tensor rowStart = csrMatrix.crow_indices().to(at::kInt);
@@ -126,16 +127,24 @@ at::Tensor sortCsr(at::Tensor& csrMatrix) {
   CHECK_CUSPARSE(cusparseXcsrsort_bufferSizeExt(
       cusparseHandle, m, n, nnz, rowStart.data_ptr<int>(),
       colIndices.data_ptr<int>(), &pBufferSizeInBytes));
-  CHECK_CUDA(cudaMalloc(&pBuffer, pBufferSizeInBytes));
 
-  CHECK_CUDA(cudaMalloc(reinterpret_cast<void**>(&P), sizeof(int) * nnz));
+  // Allocated through PyTorch, so that they are freed also when an exception
+  // is thrown, and so that memory cached by PyTorch's allocator can be reused.
+  at::Tensor pBufferTensor =
+      at::empty({static_cast<int64_t>(pBufferSizeInBytes)},
+                at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+  void* pBuffer = pBufferTensor.mutable_data_ptr();
+
+  at::Tensor PTensor =
+      at::empty({nnz}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+  int* P = PTensor.mutable_data_ptr<int>();
   CHECK_CUSPARSE(cusparseCreateIdentityPermutation(cusparseHandle, nnz, P));
 
   CHECK_CUSPARSE(cusparseXcsrsort(
       cusparseHandle, m, n, nnz, descrA, rowStart.data_ptr<int>(),
       colIndices.mutable_data_ptr<int>(), P, pBuffer));
 
-  CHECK_CUDA(cudaFree(pBuffer));
+  pBufferTensor.reset();  // release early, before allocating valuesSorted
 
   at::Tensor valuesSorted = at::empty_like(csrMatrix.values());
 
@@ -150,7 +159,6 @@ at::Tensor sortCsr(at::Tensor& csrMatrix) {
   CHECK_CUSPARSE(cusparseDestroySpVec(vecP));
   CHECK_CUSPARSE(cusparseDestroyDnVec(vecValues));
 
-  CHECK_CUDA(cudaFree(P));
   CHECK_CUSPARSE(cusparseDestroyMatDescr(descrA));
 
   return at::native::sparse_csr_tensor(rowStart, colIndices, valuesSorted,

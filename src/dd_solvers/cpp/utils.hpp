@@ -9,6 +9,9 @@
   {                                                                   \
     cudaError_t err;                                                  \
     if ((err = (call)) != cudaSuccess) {                              \
+      /* Reset the error state, so that it does not leak into PyTorch \
+         (it checks cudaGetLastError() after each kernel launch). */  \
+      cudaGetLastError();                                             \
       std::stringstream errorMessageStream;                           \
       errorMessageStream << "CUDA error: " << cudaGetErrorString(err) \
                          << " at " << __FILE__ << ":" << __LINE__;    \
