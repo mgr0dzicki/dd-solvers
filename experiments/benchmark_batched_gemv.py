@@ -6,7 +6,6 @@ import gc
 from benchmark_utils import timeit
 
 
-@torch.compile
 def mul_torch(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return (A @ b[:, :, None].to(A.dtype)).to(b.dtype)
 
@@ -19,11 +18,18 @@ def mul_custom_synch(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return dd_solvers.gemv_strided_batched(A, b, use_shared_memory=True)
 
 
-algorithms = {
-    "irrespective": mul_custom_irrespective,
-    "synchronized": mul_custom_synch,
-    "torch": mul_torch,
-}
+def get_algorithms():
+    # Compile from scratch for every configuration: a single shared compiled
+    # function would hit Dynamo's recompile limit and silently fall back to eager
+    # mode. dynamic=False specializes the generated code to the exact shapes.
+    torch._dynamo.reset()
+    return {
+        "irrespective": mul_custom_irrespective,
+        "synchronized": mul_custom_synch,
+        "torch": mul_torch,
+        "torch_compile": torch.compile(mul_torch, dynamic=False, fullgraph=True),
+    }
+
 
 MAX_ELEMENTS = 2**27
 
@@ -48,11 +54,13 @@ for k in tqdm.tqdm(ks):
             b = torch.randn((n, k), device="cuda", dtype=b_dtype)
             exact = A.to(torch.float64) @ b.to(torch.float64)[:, :, None]
 
-            for alg_name, alg in algorithms.items():
+            for alg_name, alg in get_algorithms().items():
+                # For torch_compile, this first call also triggers compilation,
+                # so it is not included in the timings below.
                 err_norm = torch.linalg.norm(
                     exact.flatten() - alg(A, b).flatten()
                 ).item()
-                iters = 10 if alg_name == "torch" and k < 40 else 100
+                iters = 10 if alg_name.startswith("torch") and k < 40 else 100
                 times = [
                     timeit(
                         lambda: alg(A, b),
