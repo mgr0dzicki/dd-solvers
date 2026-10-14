@@ -22,13 +22,8 @@ preconditioner_factory = ExperimentFactory(
     **preconditioner_factory_kwargs, mesh_family=mesh_family
 )
 
-ms = [
-    (f"C{solvers_m}", f"C{solvers_m}", f"S{fine_m}")
-    for solvers_m in range(2, fine_m + 1)
-] + [
-    (f"S{solvers_m}", f"S{solvers_m}", f"S{fine_m}")
-    for solvers_m in range(2, fine_m + 1)
-]
+ms = [(f"C3", f"C{solvers_m}", f"S{fine_m}") for solvers_m in range(3, fine_m + 1)]
+ms += [(f"S3", f"S{solvers_m}", f"S{fine_m}") for solvers_m in range(3, fine_m + 1)]
 
 preconditioners = [
     AdditiveSchwarz(prec, local_solver, CUDSS(), collect_timings=True)
