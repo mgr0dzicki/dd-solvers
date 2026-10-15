@@ -95,13 +95,17 @@ c10::intrusive_ptr<CudssSolver> spdFactorize(const at::Tensor& A) {
       colIndices.mutable_data_ptr<int>(), values, CUDA_R_32I, valueType,
       CUDSS_MTYPE_SPD, CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO));
 
+  // Created before analysis and factorization, so that its destructor releases
+  // the cuDSS memory if any of them throws (e.g. CUDSS_STATUS_ALLOC_FAILED).
+  auto solver = c10::make_intrusive<CudssSolver>(
+      config, data, cudssMatrix, rowStart, colIndices, A.values());
+
   CHECK_CUDSS(cudssExecute(cudssHandle, CUDSS_PHASE_ANALYSIS, config, data,
                            cudssMatrix, nullptr, nullptr));
   CHECK_CUDSS(cudssExecute(cudssHandle, CUDSS_PHASE_FACTORIZATION, config, data,
                            cudssMatrix, nullptr, nullptr));
 
-  return c10::make_intrusive<CudssSolver>(config, data, cudssMatrix, rowStart,
-                                          colIndices, A.values());
+  return solver;
 }
 
 struct CudssBatchSolver : torch::CustomClassHolder {
@@ -236,14 +240,18 @@ c10::intrusive_ptr<CudssBatchSolver> spdBatchFactorize(
       CUDA_R_32I, valueType, CUDSS_MTYPE_SPD, CUDSS_MVIEW_FULL,
       CUDSS_BASE_ZERO));
 
+  // Created before analysis and factorization, so that its destructor releases
+  // the cuDSS memory if any of them throws (e.g. CUDSS_STATUS_ALLOC_FAILED).
+  auto solver = c10::make_intrusive<CudssBatchSolver>(
+      config, data, matrixBatch, nrowsHost, onesHost, nnzHost, rowStartInt,
+      colIndicesInt, rowStartPtrs, colIndicesPtrs, valuesPtrs, nrowsCumSumEx);
+
   CHECK_CUDSS(cudssExecute(cudssHandle, CUDSS_PHASE_ANALYSIS, config, data,
                            matrixBatch, nullptr, nullptr));
   CHECK_CUDSS(cudssExecute(cudssHandle, CUDSS_PHASE_FACTORIZATION, config, data,
                            matrixBatch, nullptr, nullptr));
 
-  return c10::make_intrusive<CudssBatchSolver>(
-      config, data, matrixBatch, nrowsHost, onesHost, nnzHost, rowStartInt,
-      colIndicesInt, rowStartPtrs, colIndicesPtrs, valuesPtrs, nrowsCumSumEx);
+  return solver;
 }
 
 TORCH_LIBRARY(dd_solvers_cudss, m) {
